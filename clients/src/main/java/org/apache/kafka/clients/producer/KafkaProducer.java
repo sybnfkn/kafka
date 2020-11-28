@@ -239,11 +239,15 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
     public static final String NETWORK_THREAD_PREFIX = "kafka-producer-network-thread";
     public static final String PRODUCER_METRIC_GROUP_NAME = "producer-metrics";
 
+    // 生产者唯一标示
     private final String clientId;
     // Visible for testing
     final Metrics metrics;
+    // 分区选择器 根据一定策略将消息路由到合适的分区
     private final Partitioner partitioner;
+    // 消息最大长度，包括消息头，序列化后key和序列化后value的长度
     private final int maxRequestSize;
+    // 发送单个消息缓冲区大小
     private final long totalMemorySize;
     private final ProducerMetadata metadata;
     private final RecordAccumulator accumulator;
