@@ -51,10 +51,12 @@ public class MemoryRecordsBuilder implements AutoCloseable {
     });
 
     private final TimestampType timestampType;
+    // 压缩器，将压缩后数据输出到buffer
     private final CompressionType compressionType;
     // Used to hold a reference to the underlying ByteBuffer so that we can write the record batch header and access
     // the written bytes. ByteBufferOutputStream allocates a new ByteBuffer if the existing one is not large enough,
     // so it's not safe to hold a direct reference to the underlying ByteBuffer.
+    // 封装了ByteBuffer，数据超过ByteBuffer，会进行自动扩容
     private final ByteBufferOutputStream bufferStream;
     private final byte magic;
     private final int initialPosition;
@@ -62,6 +64,7 @@ public class MemoryRecordsBuilder implements AutoCloseable {
     private final long logAppendTime;
     private final boolean isControlBatch;
     private final int partitionLeaderEpoch;
+    // buffer最多可写入多少字节数据
     private final int writeLimit;
     private final int batchHeaderSizeInBytes;
 
@@ -70,6 +73,7 @@ public class MemoryRecordsBuilder implements AutoCloseable {
     private float estimatedCompressionRatio = 1.0F;
 
     // Used to append records, may compress data on the fly
+    // 具备压缩功能，对bufferStream进行修饰
     private DataOutputStream appendStream;
     private boolean isTransactional;
     private long producerId;
@@ -83,6 +87,7 @@ public class MemoryRecordsBuilder implements AutoCloseable {
     private Long lastOffset = null;
     private Long firstTimestamp = null;
 
+    // 整整存放消息的地方
     private MemoryRecords builtRecords;
     private boolean aborted = false;
 
@@ -131,6 +136,7 @@ public class MemoryRecordsBuilder implements AutoCloseable {
 
         bufferStream.position(initialPosition + batchHeaderSizeInBytes);
         this.bufferStream = bufferStream;
+        // 各种压缩方式
         this.appendStream = new DataOutputStream(compressionType.wrapForOutput(this.bufferStream, magic));
     }
 
@@ -774,6 +780,15 @@ public class MemoryRecordsBuilder implements AutoCloseable {
     /**
      * Check if we have room for a new record containing the given key/value pair. If no records have been
      * appended, then this returns true.
+     */
+    /**
+     * 根据Compressor估算已写入字节数，估计MemoryRecords剩余空间是否足够写入指定数据
+     * 只是估算并不准确，计算之后然后写入，也还是有可能导致底层bytebuffer扩容
+     * @param timestamp
+     * @param key
+     * @param value
+     * @param headers
+     * @return
      */
     public boolean hasRoomFor(long timestamp, byte[] key, byte[] value, Header[] headers) {
         return hasRoomFor(timestamp, wrapNullable(key), wrapNullable(value), headers);

@@ -44,6 +44,7 @@ public class MemoryRecords extends AbstractRecords {
     private static final Logger log = LoggerFactory.getLogger(MemoryRecords.class);
     public static final MemoryRecords EMPTY = MemoryRecords.readableRecords(ByteBuffer.allocate(0));
 
+    // 保存消息的buffer
     private final ByteBuffer buffer;
 
     private final Iterable<MutableRecordBatch> batches = this::batchIterator;

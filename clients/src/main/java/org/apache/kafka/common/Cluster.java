@@ -35,15 +35,23 @@ import java.util.Set;
 public final class Cluster {
 
     private final boolean isBootstrapConfigured;
+    // 集群中节点信息列表，节点的host，ip，port信息
     private final List<Node> nodes;
     private final Set<String> unauthorizedTopics;
     private final Set<String> invalidTopics;
     private final Set<String> internalTopics;
     private final Node controller;
+    /**
+     *
+     */
     private final Map<TopicPartition, PartitionInfo> partitionsByTopicPartition;
+    // topic名称和PartitionInfo关系。按照topic名称查询全部分区详细信息，List<PartitionInfo>存放分区不一定是leader副本的partition
     private final Map<String, List<PartitionInfo>> partitionsByTopic;
+    //topic名称和PartitionInfo关系。 List<PartitionInfo>存放分区必须是leader副本的partition
     private final Map<String, List<PartitionInfo>> availablePartitionsByTopic;
+    // 记录node和PartitionInfo关系，按照节点id查询其上分布的全部分区详情
     private final Map<Integer, List<PartitionInfo>> partitionsByNode;
+    // brokerid和node节点之间关系
     private final Map<Integer, Node> nodesById;
     private final ClusterResource clusterResource;
 

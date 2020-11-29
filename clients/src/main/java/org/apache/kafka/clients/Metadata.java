@@ -59,18 +59,27 @@ import static org.apache.kafka.common.record.RecordBatch.NO_PARTITION_LEADER_EPO
  */
 public class Metadata implements Closeable {
     private final Logger log;
+    // 两次发出更新cluster保存的元数据信息最小时间差，默认是100ms。
+    // 防止更新操作过于频繁呢造成网络阻塞和增加服务器压力
     private final long refreshBackoffMs;
+    // 每隔多久更新一次，默认5分钟
     private final long metadataExpireMs;
     private int updateVersion;  // bumped on every metadata response
     private int requestVersion; // bumped on every new topic addition
+    // 上一次更新元数据时间戳
     private long lastRefreshMs;
+    // 上次成功更新元数据时间戳
     private long lastSuccessfulRefreshMs;
     private KafkaException fatalException;
     private Set<String> invalidTopics;
     private Set<String> unauthorizedTopics;
+    // 元数据信息
     private MetadataCache cache = MetadataCache.empty();
+    // 是否需要全量更新
     private boolean needFullUpdate;
+    // 部分更新
     private boolean needPartialUpdate;
+    // 监听Meta更新的监听器集合
     private final ClusterResourceListeners clusterResourceListeners;
     private boolean isClosed;
     private final Map<TopicPartition, Integer> lastSeenLeaderEpochs;
@@ -142,14 +151,18 @@ public class Metadata implements Closeable {
      * Request an update of the current cluster metadata info, return the current updateVersion before the update
      */
     public synchronized int requestUpdate() {
+        // 强制全量更新
         this.needFullUpdate = true;
+        // 返回元数据版本号
         return this.updateVersion;
     }
 
     public synchronized int requestUpdateForNewTopics() {
         // Override the timestamp of last refresh to let immediate update.
         this.lastRefreshMs = 0;
+        // 设置需要部分更新
         this.needPartialUpdate = true;
+        // 请求版本+1
         this.requestVersion++;
         return this.updateVersion;
     }

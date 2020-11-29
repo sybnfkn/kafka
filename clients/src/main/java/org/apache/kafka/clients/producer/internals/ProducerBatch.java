@@ -60,20 +60,27 @@ public final class ProducerBatch {
     private enum FinalState { ABORTED, FAILED, SUCCEEDED }
 
     final long createdMs;
+    // 当前缓存消息都会发往这个partion
     final TopicPartition topicPartition;
     final ProduceRequestResult produceFuture;
 
     private final List<Thunk> thunks = new ArrayList<>();
+    // 里面的MemoryRecords，真正存放消息的地方
     private final MemoryRecordsBuilder recordsBuilder;
+    // 尝试发送当前Recordbatch次数
     private final AtomicInteger attempts = new AtomicInteger(0);
     private final boolean isSplitBatch;
     private final AtomicReference<FinalState> finalState = new AtomicReference<>(null);
 
+    // 保存的recotd个数
     int recordCount;
+    // 最大record字节数
     int maxRecordSize;
+    // 最后尝试发送时间戳
     private long lastAttemptMs;
     private long lastAppendTime;
     private long drainedMs;
+    // 是否正在重试
     private boolean retry;
     private boolean reopened;
 
@@ -101,6 +108,7 @@ public final class ProducerBatch {
      * @return The RecordSend corresponding to this record or null if there isn't sufficient room.
      */
     public FutureRecordMetadata tryAppend(long timestamp, byte[] key, byte[] value, Header[] headers, Callback callback, long now) {
+        // 是否还有空间
         if (!recordsBuilder.hasRoomFor(timestamp, key, value, headers)) {
             return null;
         } else {
