@@ -109,13 +109,18 @@ public final class ProducerBatch {
      */
     public FutureRecordMetadata tryAppend(long timestamp, byte[] key, byte[] value, Header[] headers, Callback callback, long now) {
         // 是否还有空间
+        // 首先判断 ProducerBatch  是否还能容纳当前消息，如果剩余内存不足，将直接返回 null。如果返回 null ，会尝试再创建一个新的ProducerBatch
         if (!recordsBuilder.hasRoomFor(timestamp, key, value, headers)) {
             return null;
         } else {
+            // 通过 MemoryRecordsBuilder 将消息写入按照 Kafka 消息格式写入到内存中，即写入到 在创建 ProducerBatch  时申请的 ByteBuffer 中。
             Long checksum = this.recordsBuilder.append(timestamp, key, value, headers);
+            // 新 ProducerBatch  的 maxRecordSize、lastAppendTime 属性，分别表示该批次中最大的消息长度与最后一次追加消息的时间
             this.maxRecordSize = Math.max(this.maxRecordSize, AbstractRecords.estimateSizeInBytesUpperBound(magic(),
                     recordsBuilder.compressionType(), key, value, headers));
             this.lastAppendTime = now;
+            // 构建 FutureRecordMetadata 对象，这里是典型的 Future模式，
+            // 里面主要包含了该条消息对应的批次的 produceFuture、消息在该批消息的下标，key 的长度、消息体的长度以及当前的系统时间。
             FutureRecordMetadata future = new FutureRecordMetadata(this.produceFuture, this.recordCount,
                                                                    timestamp, checksum,
                                                                    key == null ? -1 : key.length,
@@ -123,8 +128,10 @@ public final class ProducerBatch {
                                                                    Time.SYSTEM);
             // we have to keep every future returned to the users in case the batch needs to be
             // split to several new batches and resent.
+            // 将 callback 、本条消息的凭证(Future) 加入到该批次的 thunks 中，该集合存储了 一个批次中所有消息的发送回执
             thunks.add(new Thunk(callback, future));
             this.recordCount++;
+            // KafkaProducer 的 send 方法就执行完毕了，返回给调用方的就是一个 FutureRecordMetadata 对象。
             return future;
         }
     }

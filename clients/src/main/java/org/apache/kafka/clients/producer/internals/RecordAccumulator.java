@@ -220,12 +220,23 @@ public final class RecordAccumulator {
             }
 
             byte maxUsableMagic = apiVersions.maxUsableProduceMagic();
+            // 如果第一步未追加成功，说明当前没有可用的 ProducerBatch，则需要创建一个 ProducerBatch，
+            // 故先从 BufferPool 中申请 batch.size 的内存空间，为创建 ProducerBatch 做准备，
+            // 如果由于 BufferPool 中未有剩余内存，则最多等待 maxTimeToBlock ，如果在指定时间内未申请到内存，则抛出异常。
             int size = Math.max(this.batchSize, AbstractRecords.estimateSizeInBytesUpperBound(maxUsableMagic, compression, key, value, headers));
             log.trace("Allocating a new {} byte message buffer for topic {} partition {} with remaining timeout {}ms", size, tp.topic(), tp.partition(), maxTimeToBlock);
             buffer = free.allocate(size, maxTimeToBlock);
 
             // Update the current time in case the buffer allocation blocked above.
             nowMs = time.milliseconds();
+            // 创建一个新的批次 ProducerBatch，并将消息写入到该批次中，并返回追加结果，这里有如下几个关键点：
+            /**
+             * 创建 ProducerBatch ，其内部持有一个 MemoryRecordsBuilder对象，该对象负责将消息写入到内存中，即写入到 ProducerBatch 内部持有的内存，大小等于 batch.size。
+             * 将消息追加到 ProducerBatch 中。
+             * 将新创建的 ProducerBatch  添加到双端队列的末尾。
+             * 将该批次加入到 incomplete 容器中，该容器存放未完成发送到 broker 服务器中的消息批次，当 Sender 线程将消息发送到 broker 服务端后，会将其移除并释放所占内存。
+             * 返回追加结果。
+             */
             synchronized (dq) {
                 // Need to check if producer is closed again after grabbing the dequeue lock.
                 if (closed)
@@ -239,6 +250,7 @@ public final class RecordAccumulator {
 
                 MemoryRecordsBuilder recordsBuilder = recordsBuilder(buffer, maxUsableMagic);
                 ProducerBatch batch = new ProducerBatch(tp, recordsBuilder, nowMs);
+                // 再次追加
                 FutureRecordMetadata future = Objects.requireNonNull(batch.tryAppend(timestamp, key, value, headers,
                         callback, nowMs));
 
