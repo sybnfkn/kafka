@@ -70,51 +70,67 @@ public class Sender implements Runnable {
 
     private final Logger log;
 
+    // kafka 网络通信客户端，主要封装与 broker 的网络通信
     /* the state of each nodes connection */
     private final KafkaClient client;
 
+    // 消息记录累积器，消息追加的入口(RecordAccumulator 的 append 方法)
     /* the record accumulator that batches records */
     private final RecordAccumulator accumulator;
 
+    // 元数据管理器，即 topic 的路由分区信息
     /* the metadata for the client */
     private final ProducerMetadata metadata;
 
+    // 是否需要保证消息的顺序性
     /* the flag indicating whether the producer should guarantee the message order on the broker or not. */
     private final boolean guaranteeMessageOrder;
 
+    // 调用 send 方法发送的最大请求大小，包括 key、消息体序列化后的消息总大小不能超过该值。通过参数 max.request.size 来设置
     /* the maximum request size to attempt to send to the server */
     private final int maxRequestSize;
 
+    // 用来定义消息“已提交”的条件(标准)，就是 Broker 端向客户端承偌已提交的条件，可选值如下0、-1、1.
     /* the number of acknowledgements to request from the server */
     private final short acks;
 
+    // 重试次数
     /* the number of times to retry a failed request before giving up */
     private final int retries;
 
+    // 时间工具类
     /* the clock instance used for getting the time */
     private final Time time;
 
+    // 该线程状态，为 true 表示运行中。
     /* true while the sender thread is still running */
     private volatile boolean running;
 
+    // 是否强制关闭，此时会忽略正在发送中的消息。
     /* true when the caller wants to ignore all unsent/inflight messages and force close.  */
     private volatile boolean forceClose;
 
+    // 消息发送相关的统计指标收集器。
     /* metrics */
     private final SenderMetrics sensors;
 
+    // 请求的超时时间。
     /* the max time to wait for the server to respond to the request*/
     private final int requestTimeoutMs;
 
+    // 请求失败时在重试之前等待的时间。
     /* The max time to wait before retrying a request which has failed */
     private final long retryBackoffMs;
 
+    // API版本信息。
     /* current request API versions supported by the known brokers */
     private final ApiVersions apiVersions;
 
+    // 事务处理器。
     /* all the state related to transactions, in particular the producer id, producer epoch, and sequence numbers */
     private final TransactionManager transactionManager;
 
+    // 正在执行发送相关的消息批次。
     // A per-partition queue of batches ordered by creation time for tracking the in-flight batches
     private final Map<TopicPartition, List<ProducerBatch>> inFlightBatches;
 
@@ -237,6 +253,7 @@ public class Sender implements Runnable {
         // main loop, runs until close is called
         while (running) {
             try {
+                // Sender 线程在运行状态下主要的业务处理方法，将消息缓存区中的消息向 broker 发送。
                 runOnce();
             } catch (Exception e) {
                 log.error("Uncaught error in kafka producer I/O thread: ", e);
@@ -248,6 +265,7 @@ public class Sender implements Runnable {
         // okay we stopped accepting requests but there may still be
         // requests in the transaction manager, accumulator or waiting for acknowledgment,
         // wait until these are completed.
+        // 如果主动关闭 Sender 线程，如果不是强制关闭，则如果缓存区还有消息待发送，再次调用 runOnce 方法将剩余的消息发送完毕后再退出。
         while (!forceClose && ((this.accumulator.hasUndrained() || this.client.inFlightRequestCount() > 0) || hasPendingTransactionalRequests())) {
             try {
                 runOnce();
@@ -256,6 +274,7 @@ public class Sender implements Runnable {
             }
         }
 
+        // 如果主动关闭 Sender 线程，如果不是强制关闭，则如果缓存区还有消息待发送，再次调用 runOnce 方法将剩余的消息发送完毕后再退出
         // Abort the transaction if any commit or abort didn't go through the transaction manager's queue
         while (!forceClose && transactionManager != null && transactionManager.hasOngoingTransaction()) {
             if (!transactionManager.isCompleting()) {
@@ -269,6 +288,7 @@ public class Sender implements Runnable {
             }
         }
 
+        // 如果强制关闭 Sender 线程，则拒绝未完成提交的消息
         if (forceClose) {
             // We need to fail all the incomplete transactional requests and batches and wake up the threads waiting on
             // the futures.
@@ -280,6 +300,7 @@ public class Sender implements Runnable {
             this.accumulator.abortIncompleteBatches();
         }
         try {
+            // 关闭 Kafka Client 即网络通信对象
             this.client.close();
         } catch (Exception e) {
             log.error("Failed to close network client", e);
@@ -293,6 +314,7 @@ public class Sender implements Runnable {
      *
      */
     void runOnce() {
+        // 事务处理
         if (transactionManager != null) {
             try {
                 transactionManager.maybeResolveSequences();
@@ -321,6 +343,7 @@ public class Sender implements Runnable {
         }
 
         long currentTimeMs = time.milliseconds();
+        //
         long pollTimeout = sendProducerData(currentTimeMs);
         client.poll(pollTimeout, currentTimeMs);
     }
@@ -328,9 +351,11 @@ public class Sender implements Runnable {
     private long sendProducerData(long now) {
         Cluster cluster = metadata.fetch();
         // get the list of partitions with data ready to send
+        // 首先根据当前时间，根据缓存队列中的数据判断哪些 topic 的 哪些分区已经达到发送条件
         RecordAccumulator.ReadyCheckResult result = this.accumulator.ready(cluster, now);
 
         // if there are any partitions whose leaders are not known yet, force metadata update
+        // 如果在待发送的消息未找到其路由信息，则需要首先去 broker 服务器拉取对应的路由信息(分区的 leader 节点信息)
         if (!result.unknownLeaderTopics.isEmpty()) {
             // The set of topics with unknown leader contains topics with leader election pending as well as
             // topics which may have expired. Add the topic again to metadata to ensure it is included
@@ -345,17 +370,43 @@ public class Sender implements Runnable {
 
         // remove any nodes we aren't ready to send to
         Iterator<Node> iter = result.readyNodes.iterator();
+        // 移除在网络层面没有准备好的分区，并且计算在接下来多久的时间间隔内，该分区都将处于未准备状态
+        /**
+         * 在网络环节没有准备好的标准如下：
+         *
+         * 1。分区没有未完成的更新元素数据请求(metadata)。
+         * 2。当前生产者与对端 broker 已建立连接并完成了 TCP 的三次握手。
+         * 3。如果启用 SSL、ACL 等机制，相关状态都已就绪。
+         * 4。该分区对应的连接正在处理中的请求数时是否超过设定值，默认为 5，可通过属性 max.in.flight.requests.per.connection 来设置。
+         */
         long notReadyTimeout = Long.MAX_VALUE;
         while (iter.hasNext()) {
             Node node = iter.next();
             if (!this.client.ready(node, now)) {
                 iter.remove();
+                /**
+                 * client.pollDelayMs 预估分区在接下来多久的时间间隔内都将处于未转变好状态(not ready)，其标准如下：
+                 *
+                 * 1.如果已与对端的 TCP 连接已创建好，并处于已连接状态，此时如果没有触发限流，则返回0，如果有触发限流，则返回限流等待时间。
+                 * 2.如果还位于对端建立 TCP 连接，则返回 Long.MAX_VALUE，因为连接建立好后，会唤醒发送线程的。
+                 */
                 notReadyTimeout = Math.min(notReadyTimeout, this.client.pollDelayMs(node, now));
             }
         }
 
+        /**
+         * 根据已准备的分区，从缓存区中抽取待发送的消息批次( ProducerBatch )，
+         * 并且按照 nodeId:List 组织，注意，抽取后的 ProducerBatch 将不能再追加消息了，就算还有剩余空间可用，
+         */
         // create produce requests
         Map<Integer, List<ProducerBatch>> batches = this.accumulator.drain(cluster, result.readyNodes, this.maxRequestSize, now);
+        /**
+         * 将抽取的 ProducerBatch 加入到 inFlightBatches 数据结构，
+         * 该属性的声明如下：Map<TopicPartition, List< ProducerBatch >> inFlightBatches，
+         * 即按照 topic-分区 为键，存放已抽取的 ProducerBatch，这个属性的含义就是存储待发送的消息批次。
+         * 可以根据该数据结构得知在消息发送时以分区为维度反馈 Sender 线程的“积压情况”，max.in.flight.requests.per.connection 就是来控制积压的最大数量，
+         * 如果积压达到这个数值，针对该队列的消息发送会限流。
+         */
         addToInflightBatches(batches);
         if (guaranteeMessageOrder) {
             // Mute all the partitions drained
@@ -365,6 +416,8 @@ public class Sender implements Runnable {
             }
         }
 
+        // 从 inflightBatches 与 batches 中查找已过期的消息批次( ProducerBatch )，
+        // 判断是否过期的标准是系统当前时间与 ProducerBatch 创建时间之差是否超过120s，过期时间可以通过参数 delivery.timeout.ms 设置
         accumulator.resetNextBatchExpiryTime();
         List<ProducerBatch> expiredInflightBatches = getExpiredInflightBatches(now);
         List<ProducerBatch> expiredBatches = this.accumulator.expiredBatches(now);
@@ -373,6 +426,8 @@ public class Sender implements Runnable {
         // Reset the producer id if an expired batch has previously been sent to the broker. Also update the metrics
         // for expired batches. see the documentation of @TransactionState.resetIdempotentProducerId to understand why
         // we need to reset the producer id here.
+        // 处理已超时的消息批次，通知该批消息发送失败，
+        // 即通过设置  KafkaProducer#send 方法返回的凭证中的 FutureRecordMetadata 中的 ProduceRequestResult result，使之调用其 get 方法不会阻塞。
         if (!expiredBatches.isEmpty())
             log.trace("Expired {} batches in accumulator", expiredBatches.size());
         for (ProducerBatch expiredBatch : expiredBatches) {
@@ -391,6 +446,7 @@ public class Sender implements Runnable {
         // time, and the delay time for checking data availability. Note that the nodes may have data that isn't yet
         // sendable due to lingering, backing off, etc. This specifically does not include nodes with sendable data
         // that aren't ready to send since they would cause busy looping.
+        // 设置下一次的发送延时
         long pollTimeout = Math.min(result.nextReadyCheckDelayMs, notReadyTimeout);
         pollTimeout = Math.min(pollTimeout, this.accumulator.nextExpiryTimeMs() - now);
         pollTimeout = Math.max(pollTimeout, 0);
@@ -402,6 +458,11 @@ public class Sender implements Runnable {
             // otherwise the select time will be the time difference between now and the metadata expiry time;
             pollTimeout = 0;
         }
+        /**
+         * 该步骤按照 brokerId 分别构建发送请求，即每一个 broker 会将多个  ProducerBatch 一起封装成一个请求进行发送，
+         * 同一时间，每一个 与 broker 连接只会只能发送一个请求，注意，这里只是构建请求，并最终会通过 NetworkClient#send 方法，
+         * 将该批数据设置到 NetworkClient 的待发送数据中，此时并没有触发真正的网络调用。
+         */
         sendProduceRequests(batches, now);
         return pollTimeout;
     }

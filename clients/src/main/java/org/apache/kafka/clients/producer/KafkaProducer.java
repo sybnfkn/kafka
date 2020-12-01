@@ -236,6 +236,7 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
 
     private final Logger log;
     private static final String JMX_PREFIX = "kafka.producer";
+    //
     public static final String NETWORK_THREAD_PREFIX = "kafka-producer-network-thread";
     public static final String PRODUCER_METRIC_GROUP_NAME = "producer-metrics";
 
