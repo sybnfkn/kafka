@@ -915,6 +915,8 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
             long nowMs = time.milliseconds();
             ClusterAndWaitTime clusterAndWaitTime;
             try {
+                // 获取topic分区列表，如果本地没有topic分区信息，需要从远端broker获取，该方法会返回拉取元数据耗费时间。
+                // 消息发送时，最大等待时间会扣除这部分的时间消耗
                 // 收集kafka集群信息，底层唤醒sender线程更新metadata中保存的kafka集群元信息
                 clusterAndWaitTime = waitOnMetadata(record.topic(), record.partition(), nowMs, maxBlockTimeMs);
             } catch (KafkaException e) {
@@ -923,12 +925,13 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
                 throw e;
             }
             nowMs += clusterAndWaitTime.waitedOnMetadataMs;
+            // 剩余等待时间 （最大等待时间 - 拉取元数据消耗时间）
             long remainingWaitMs = Math.max(0, maxBlockTimeMs - clusterAndWaitTime.waitedOnMetadataMs);
             // 集群信息
             Cluster cluster = clusterAndWaitTime.cluster;
             byte[] serializedKey;
             try {
-                // key消息的序列化
+                // key消息的序列化 参与序列化的只有key
                 serializedKey = keySerializer.serialize(record.topic(), record.headers(), record.key());
             } catch (ClassCastException cce) {
                 throw new SerializationException("Can't convert key of class " + record.key().getClass().getName() +
@@ -937,22 +940,26 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
             }
             byte[] serializedValue;
             try {
-                // value的序列化
+                // value的序列化，消息内容进行序列化
                 serializedValue = valueSerializer.serialize(record.topic(), record.headers(), record.value());
             } catch (ClassCastException cce) {
                 throw new SerializationException("Can't convert value of class " + record.value().getClass().getName() +
                         " to class " + producerConfig.getClass(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG).getName() +
                         " specified in value.serializer", cce);
             }
-            // 为消息选择合适的分区
+            // 根据分区负载算法计算本次消息发往的分区 默认是DefaultPartitioner
+            // 如果指定了key，使用key的hashcode对分区取模
+            // 如果未指定，轮训所有分区
             int partition = partition(record, serializedKey, serializedValue, cluster);
 
             // 封住路由信息
             tp = new TopicPartition(record.topic(), partition);
 
+            // 如果是消息头信息(RecordHeaders)，则设置为只读。
             setReadOnly(record.headers());
             Header[] headers = record.headers().toArray();
 
+            // 根据使用的版本号，按照消息协议来计算消息的长度，并是否超过指定长度，如果超过则抛出异常。
             int serializedSize = AbstractRecords.estimateSizeInBytesUpperBound(apiVersions.maxUsableProduceMagic(),
                     compressionType, serializedKey, serializedValue, headers);
             ensureValidRecordSize(serializedSize);
@@ -960,15 +967,19 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
             if (log.isTraceEnabled()) {
                 log.trace("Attempting to append record {} with callback {} to topic {} partition {}", record, callback, record.topic(), partition);
             }
+
             // producer callback will make sure to call both 'callback' and interceptor callback
             Callback interceptCallback = new InterceptorCallback<>(callback, this.interceptors, tp);
 
+            // 事务相关
             if (transactionManager != null && transactionManager.isTransactional()) {
                 transactionManager.failIfNotReadyForSend();
             }
             // 将消息追加到RecordAccumulator
             /**
-             *
+             *将消息追加到缓存区。如果当前缓存区已写满或创建了一个新的缓存区，则唤醒 Sender(消息发送线程)，
+             * 将缓存区中的消息发送到 broker 服务器，最终返回 future。这里是经典的 Future 设计模式，从这里也能得知，
+             * doSend 方法执行完成后，此时消息还不一定成功发送到 broker
              */
             RecordAccumulator.RecordAppendResult result = accumulator.append(tp, timestamp, serializedKey,
                     serializedValue, headers, interceptCallback, remainingWaitMs, true, nowMs);

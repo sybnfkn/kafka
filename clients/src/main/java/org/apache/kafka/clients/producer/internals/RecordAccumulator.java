@@ -179,13 +179,13 @@ public final class RecordAccumulator {
      *                        running the partitioner's onNewBatch method before trying to append again
      * @param nowMs The current time, in milliseconds
      */
-    public RecordAppendResult append(TopicPartition tp,
-                                     long timestamp,
+    public RecordAppendResult append(TopicPartition tp, // topic 与分区信息，即发送到哪个 topic 的那个分区
+                                     long timestamp, // 客户端发送时的时间戳
                                      byte[] key,
                                      byte[] value,
-                                     Header[] headers,
+                                     Header[] headers,// 消息头，可以理解为额外消息属性。
                                      Callback callback,
-                                     long maxTimeToBlock,
+                                     long maxTimeToBlock, // 追加超时时间
                                      boolean abortOnNewBatch,
                                      long nowMs) throws InterruptedException {
         // We keep track of the number of appending thread to make sure we do not miss batches in
@@ -196,6 +196,14 @@ public final class RecordAccumulator {
         try {
             // check if we have an in-progress batch
             // 路由信息获取数组
+            /**
+             * 尝试根据 topic与分区在 kafka 中获取一个双端队列，如果不存在，则创建一个，然后调用 tryAppend 方法将消息追加到缓存中。
+             * Kafka 会为每一个 topic 的每一个分区创建一个消息缓存区，消息先追加到缓存中，然后消息发送 API 立即返回，
+             * 然后由单独的线程 Sender 将缓存区中的消息定时发送到 broker 。这里的缓存区的实现使用的是 ArrayQeque。
+             * 然后调用 tryAppend 方法尝试将消息追加到其缓存区，如果追加成功，则返回结果。
+             */
+            // 双端队列每个元素用producerbatch标示
+            // 每个producerBatch代表一个batch.size字节的内存，在 Kafka代表一个批次
             Deque<ProducerBatch> dq = getOrCreateDeque(tp);
             synchronized (dq) {
                 if (closed)
