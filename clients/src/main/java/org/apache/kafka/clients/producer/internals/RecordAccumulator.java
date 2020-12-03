@@ -470,6 +470,7 @@ public final class RecordAccumulator {
         Set<String> unknownLeaderTopics = new HashSet<>();
 
         boolean exhausted = this.free.queued() > 0;
+        // 对生产者缓存区 ConcurrentHashMap<TopicPartition, Deque< ProducerBatch>> batches 遍历，从中挑选已准备好的消息批次。
         for (Map.Entry<TopicPartition, Deque<ProducerBatch>> entry : this.batches.entrySet()) {
             Deque<ProducerBatch> deque = entry.getValue();
             synchronized (deque) {
@@ -479,17 +480,41 @@ public final class RecordAccumulator {
                 if (batch != null) {
                     TopicPartition part = entry.getKey();
                     Node leader = cluster.leaderFor(part);
+                    // 从生产者元数据缓存中尝试查找分区(TopicPartition) 的 leader 信息，
+                    // 如果不存在，当将该 topic 添加到 unknownLeaderTopics，稍后会发送元数据更新请求去 broker 端查找分区的路由信息。
                     if (leader == null) {
                         // This is a partition for which leader is not known, but messages are available to send.
                         // Note that entries are currently not removed from batches when deque is empty.
                         unknownLeaderTopics.add(part.topic());
-                    } else if (!readyNodes.contains(leader) && !isMuted(part)) {
+                    } else if (!readyNodes.contains(leader) && !isMuted(part)) { // 如果不在 readyNodes 中就需要判断是否满足条件，isMuted 与顺序消息有关
+                        // 该 ProducerBatch 已等待的时长，等于当前时间戳 与 ProducerBatch 的 lastAttemptMs 之差，
+                        // 在 ProducerBatch 创建时或需要重试时会将当前的时间赋值给lastAttemptMs。
                         long waitedTimeMs = batch.waitedTimeMs(nowMs);
+                        // 后台发送是否关闭，即如果需要重试并且等待时间小于 retryBackoffMs ，则 backingOff = true，也意味着该批次未准备好。
                         boolean backingOff = batch.attempts() > 0 && waitedTimeMs < retryBackoffMs;
+                        // send 线程发送消息需要的等待时间，如果 backingOff  为 true，表示该批次是在重试，
+                        // 并且等待时间小于系统设置的需要等待时间，这种情况下 timeToWaitMs = retryBackoffMs 。
+                        // 否则需要等待的时间为 lingerMs。
                         long timeToWaitMs = backingOff ? retryBackoffMs : lingerMs;
+                        /**
+                         * boolean full 该批次是否已满，如果两个条件中的任意一个满足即为 true。
+                         * Deque< ProducerBatch> 该队列的个数大于1，表示肯定有一个 ProducerBatch 已写满。
+                         * ProducerBatch 已写满。
+                         */
                         boolean full = deque.size() > 1 || batch.isFull();
+                        // 是否过期，等于已经等待的时间是否大于需要等待的时间，
+                        // 如果把发送看成定时发送的话，expired 为 true 表示定时器已到达触发点，即需要执行。
                         boolean expired = waitedTimeMs >= timeToWaitMs;
+                        /**
+                         * 满足下面的任意一个条件即可：
+                         * 该批次已写满。(full = true)。
+                         * 已等待系统规定的时长。（expired = true）
+                         * 发送者内部缓存区已耗尽并且有新的线程需要申请(exhausted = true)。
+                         * 该发送者的 close 方法被调用(close = true)。
+                         * 该发送者的 flush 方法被调用。
+                         */
                         boolean sendable = full || expired || exhausted || closed || flushInProgress();
+                        // 这里就是判断是否准备好的条件
                         if (sendable && !backingOff) {
                             readyNodes.add(leader);
                         } else {
@@ -564,10 +589,17 @@ public final class RecordAccumulator {
 
     private List<ProducerBatch> drainBatchesForOneNode(Cluster cluster, Node node, int maxSize, long now) {
         int size = 0;
+        // 根据 brokerId 获取该 broker 上的所有主分区
         List<PartitionInfo> parts = cluster.partitionsForNode(node.id());
         List<ProducerBatch> ready = new ArrayList<>();
         /* to make starvation less likely this loop doesn't start at 0 */
+        /**
+         * 初始化 start。这里首先来阐述一下 start 与 drainIndex 。
+         * start 当前开始遍历的分区序号。
+         * drainIndex 上次抽取的队列索引后，这里主要是为了每个队列都是从零号分区开始抽取。
+         */
         int start = drainIndex = drainIndex % parts.size();
+        // 循环从缓存区抽取对应分区中累积的数据
         do {
             PartitionInfo part = parts.get(drainIndex);
             TopicPartition tp = new TopicPartition(part.topic(), part.partition());
@@ -577,22 +609,26 @@ public final class RecordAccumulator {
             if (isMuted(tp))
                 continue;
 
+            // 根据 topic + 分区号从生产者发送缓存区中获取已累积的双端Queue
             Deque<ProducerBatch> deque = getDeque(tp);
             if (deque == null)
                 continue;
 
             synchronized (deque) {
                 // invariant: !isMuted(tp,now) && deque != null
+                // 从双端队列的头部获取一个元素。（消息追加时是追加到队列尾部）
                 ProducerBatch first = deque.peekFirst();
                 if (first == null)
                     continue;
 
                 // first != null
+                // 如果当前批次是重试，并且还未到阻塞时间，则跳过该分区
                 boolean backoff = first.attempts() > 0 && first.waitedTimeMs(now) < retryBackoffMs;
                 // Only drain the batch if it is not during backoff period.
                 if (backoff)
                     continue;
 
+                // 如果当前已抽取的消息总大小 加上新的消息已超过 maxRequestSize，则结束抽取
                 if (size + first.estimatedSizeInBytes() > maxSize && !ready.isEmpty()) {
                     // there is a rare case that a single batch size is larger than the request size due to
                     // compression; in this case we will still eventually send this batch in a single request
@@ -601,6 +637,7 @@ public final class RecordAccumulator {
                     if (shouldStopDrainBatchesForPartition(first, tp))
                         break;
 
+                    // 将当前批次加入到已准备集合中，并关闭该批次，即不在允许向该批次中追加消息。
                     boolean isTransactional = transactionManager != null && transactionManager.isTransactional();
                     ProducerIdAndEpoch producerIdAndEpoch =
                         transactionManager != null ? transactionManager.producerIdAndEpoch() : null;
@@ -637,10 +674,10 @@ public final class RecordAccumulator {
      * Drain all the data for the given nodes and collate them into a list of batches that will fit within the specified
      * size on a per-node basis. This method attempts to avoid choosing the same topic-node over and over.
      *
-     * @param cluster The current cluster metadata
-     * @param nodes The list of node to drain
-     * @param maxSize The maximum number of bytes to drain
-     * @param now The current unix time in milliseconds
+     * @param cluster The current cluster metadata 集群信息
+     * @param nodes The list of node to drain 已经准备好的节点集合
+     * @param maxSize The maximum number of bytes to drain 一次请求最大的字节数
+     * @param now The current unix time in milliseconds 当前时间
      * @return A list of {@link ProducerBatch} for each node specified with total size less than the requested maxSize.
      */
     public Map<Integer, List<ProducerBatch>> drain(Cluster cluster, Set<Node> nodes, int maxSize, long now) {
@@ -648,6 +685,8 @@ public final class RecordAccumulator {
             return Collections.emptyMap();
 
         Map<Integer, List<ProducerBatch>> batches = new HashMap<>();
+        // 遍历所有节点，调用 drainBatchesForOneNode 方法抽取数据，
+        // 组装成 Map<Integer /** brokerId */, List< ProducerBatch>> batches
         for (Node node : nodes) {
             List<ProducerBatch> ready = drainBatchesForOneNode(cluster, node, maxSize, now);
             batches.put(node.id(), ready);

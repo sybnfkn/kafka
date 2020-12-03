@@ -556,8 +556,11 @@ public class NetworkClient implements KafkaClient {
             return responses;
         }
 
+        // c尝试更新云数据
         long metadataTimeout = metadataUpdater.maybeUpdate(now);
         try {
+            // 触发真正的网络通讯，该方法中会通过收到调用 NIO 中的 Selector#select() 方法，
+            // 对通道的读写就绪事件进行处理，当写事件就绪后，就会将通道中的消息发送到远端的 broker。
             this.selector.poll(Utils.min(timeout, metadataTimeout, defaultRequestTimeoutMs));
         } catch (IOException e) {
             log.error("Unexpected error during I/O", e);
@@ -565,6 +568,7 @@ public class NetworkClient implements KafkaClient {
 
         // process completed actions
         long updatedNow = this.time.milliseconds();
+        // 然后会消息发送，消息接收、断开连接、API版本，超时等结果进行收集。
         List<ClientResponse> responses = new ArrayList<>();
         handleCompletedSends(responses, updatedNow);
         handleCompletedReceives(responses, updatedNow);
@@ -573,6 +577,8 @@ public class NetworkClient implements KafkaClient {
         handleInitiateApiVersionRequests(updatedNow);
         handleTimedOutConnections(responses, updatedNow);
         handleTimedOutRequests(responses, updatedNow);
+        // 并依次对结果进行唤醒，此时会将响应结果设置到  KafkaProducer#send 方法返回的凭证中，
+        // 从而唤醒发送客户端，完成一次完整的消息发送流程。
         completeResponses(responses);
 
         return responses;
