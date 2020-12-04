@@ -62,6 +62,7 @@ import org.slf4j.Logger;
  * <p>
  * The accumulator uses a bounded amount of memory and append calls will block when that memory is exhausted, unless
  * this behavior is explicitly disabled.
+ * 默认32M
  */
 public final class RecordAccumulator {
 
@@ -78,7 +79,7 @@ public final class RecordAccumulator {
     private final Time time;
     private final ApiVersions apiVersions;
     // 缓存了发往对应的消息
-    // ArrayDeque
+    // 一个topic&partition 对应 一个ArrayDeque集合
     private final ConcurrentMap<TopicPartition, Deque<ProducerBatch>> batches;
     private final IncompleteBatches incomplete;
     // The following variables are only accessed by the sender thread, so we don't need to protect them.

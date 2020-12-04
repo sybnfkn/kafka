@@ -268,7 +268,7 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
     private final Serializer<V> valueSerializer;
     // 使用反射初始化KafkaProducer配置的相关对象
     private final ProducerConfig producerConfig;
-    // 等待更新kafka元数据最大时长
+    // 阻塞时长
     private final long maxBlockTimeMs;
     // 消息发送前对其进行拦截或者修改
     private final ProducerInterceptors<K, V> interceptors;
