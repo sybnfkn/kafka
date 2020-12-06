@@ -216,6 +216,7 @@ public class KafkaChannel implements AutoCloseable {
         if (socketChannel != null) {
             remoteAddress = socketChannel.getRemoteAddress();
         }
+        // 返回true表示连接好了
         boolean connected = transportLayer.finishConnect();
         if (connected) {
             if (ready()) {
@@ -374,13 +375,16 @@ public class KafkaChannel implements AutoCloseable {
     public void setSend(Send send) {
         if (this.send != null)
             throw new IllegalStateException("Attempt to begin a send operation with prior send operation still in progress, connection id is " + id);
+        // 保存下来
         this.send = send;
+        // 添加对write的监听
         this.transportLayer.addInterestOps(SelectionKey.OP_WRITE);
     }
 
     public Send maybeCompleteSend() {
         if (send != null && send.completed()) {
             midWrite = false;
+            // 如果写完了，则移除对WRITE事件的监听
             transportLayer.removeInterestOps(SelectionKey.OP_WRITE);
             Send result = send;
             send = null;

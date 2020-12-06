@@ -60,6 +60,7 @@ public class ByteBufferSend implements Send {
         long written = channel.write(buffers);
         if (written < 0)
             throw new EOFException("Wrote negative bytes to channel. This shouldn't happen.");
+        // 写了多少，还剩多少
         remaining -= written;
         pending = TransportLayers.hasPendingWrites(channel);
         return written;

@@ -556,7 +556,7 @@ public class NetworkClient implements KafkaClient {
             return responses;
         }
 
-        // c尝试更新云数据
+        // 尝试更新云数据
         long metadataTimeout = metadataUpdater.maybeUpdate(now);
         try {
             // 触发真正的网络通讯，该方法中会通过收到调用 NIO 中的 Selector#select() 方法，
