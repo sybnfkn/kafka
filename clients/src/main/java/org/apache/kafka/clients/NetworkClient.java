@@ -894,6 +894,7 @@ public class NetworkClient implements KafkaClient {
             // If the received response includes a throttle delay, throttle the connection.
             maybeThrottle(response, req.header.apiVersion(), req.destination, now);
             if (req.isInternalRequest && response instanceof MetadataResponse)
+                // 元数据响应
                 metadataUpdater.handleSuccessfulResponse(req.header, now, (MetadataResponse) response);
             else if (req.isInternalRequest && response instanceof ApiVersionsResponse)
                 handleApiVersionsResponse(responses, req, now, (ApiVersionsResponse) response);
@@ -1060,6 +1061,7 @@ public class NetworkClient implements KafkaClient {
 
             // Beware that the behavior of this method and the computation of timeouts for poll() are
             // highly dependent on the behavior of leastLoadedNode.
+            // 最小负载的节点
             Node node = leastLoadedNode(now);
             if (node == null) {
                 log.debug("Give up sending metadata request since no node is available");
@@ -1128,6 +1130,7 @@ public class NetworkClient implements KafkaClient {
                 log.trace("Ignoring empty metadata response with correlation id {}.", requestHeader.correlationId());
                 this.metadata.failedUpdate(now);
             } else {
+                // 更新元数据
                 this.metadata.update(inProgress.requestVersion, response, inProgress.isPartialUpdate, now);
             }
 
@@ -1157,6 +1160,7 @@ public class NetworkClient implements KafkaClient {
         private long maybeUpdate(long now, Node node) {
             String nodeConnectionId = node.idString();
 
+            // 发送请求
             if (canSendRequest(nodeConnectionId, now)) {
                 Metadata.MetadataRequestAndVersion requestAndVersion = metadata.newMetadataRequestAndVersion(now);
                 MetadataRequest.Builder metadataRequest = requestAndVersion.requestBuilder;

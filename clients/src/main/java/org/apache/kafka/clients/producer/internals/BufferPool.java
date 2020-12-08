@@ -206,7 +206,7 @@ public class BufferPool {
                             // 从空闲列表中取出一个，不满足客户的需求，
                             freeUp(size - accumulated); // 客户端还急需要多少内存
                             // 1.客户还需要的内存大小（size - accumulated） < nonPooledAvailableMemory , 那直接从nonPooledAvailableMemory 划分出size - accumulated  -- 循环会退出
-                            // 2.客户还需要的内存大小（size - accumulated） > nonPooledAvailableMemory , 直接将nonPooledAvailableMemory 划分出nonPooledAvailableMemory -- 循环不会退出
+                            // 2.客户还需要的内存大小（size - accumulated） > nonPooledAvailableMemory , 直接将nonPooledAvailableMemory 划分出所有nonPooledAvailableMemory -- 循环不会退出
                             int got = (int) Math.min(size - accumulated, this.nonPooledAvailableMemory);
                             this.nonPooledAvailableMemory -= got;
                             accumulated += got;
@@ -275,6 +275,7 @@ public class BufferPool {
     /**
      * Attempt to ensure we have at least the requested number of bytes of memory for allocation by deallocating pooled
      * buffers (if needed)
+     * 吧free空间都放到nonPooledAvailableMemory空间去
      */
     private void freeUp(int size) {
         // 吧free拿空了，就会推出

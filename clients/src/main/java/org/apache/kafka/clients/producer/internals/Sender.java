@@ -397,6 +397,7 @@ public class Sender implements Runnable {
         /**
          * 根据已准备的分区，从缓存区中抽取待发送的消息批次( ProducerBatch )，
          * 并且按照 nodeId:List 组织，注意，抽取后的 ProducerBatch 将不能再追加消息了，就算还有剩余空间可用，
+         * maxRequestSize ： max.request.size 单次消息请求最大值
          */
         // create produce requests
         Map<Integer, List<ProducerBatch>> batches = this.accumulator.drain(cluster, result.readyNodes, this.maxRequestSize, now);
@@ -404,10 +405,11 @@ public class Sender implements Runnable {
          * 将抽取的 ProducerBatch 加入到 inFlightBatches 数据结构，
          * 该属性的声明如下：Map<TopicPartition, List< ProducerBatch >> inFlightBatches，
          * 即按照 topic-分区 为键，存放已抽取的 ProducerBatch，这个属性的含义就是存储待发送的消息批次。
-         * 可以根据该数据结构得知在消息发送时以分区为维度反馈 Sender 线程的“积压情况”，max.in.flight.requests.per.connection 就是来控制积压的最大数量，
+         * 可以根据该数据结构得知在消息发送时**以分区为维度反馈 Sender 线程的“积压情况”**，max.in.flight.requests.per.connection 就是来控制积压的最大数量，
          * 如果积压达到这个数值，针对该队列的消息发送会限流。
          */
         addToInflightBatches(batches);
+
         if (guaranteeMessageOrder) {
             // Mute all the partitions drained
             for (List<ProducerBatch> batchList : batches.values()) {
@@ -419,6 +421,7 @@ public class Sender implements Runnable {
         // 从 inflightBatches 与 batches 中查找已过期的消息批次( ProducerBatch )，
         // 判断是否过期的标准是系统当前时间与 ProducerBatch 创建时间之差是否超过120s，过期时间可以通过参数 delivery.timeout.ms 设置
         accumulator.resetNextBatchExpiryTime();
+
         List<ProducerBatch> expiredInflightBatches = getExpiredInflightBatches(now);
         List<ProducerBatch> expiredBatches = this.accumulator.expiredBatches(now);
         expiredBatches.addAll(expiredInflightBatches);
@@ -430,6 +433,7 @@ public class Sender implements Runnable {
         // 即通过设置  KafkaProducer#send 方法返回的凭证中的 FutureRecordMetadata 中的 ProduceRequestResult result，使之调用其 get 方法不会阻塞。
         if (!expiredBatches.isEmpty())
             log.trace("Expired {} batches in accumulator", expiredBatches.size());
+        // 通知发送方失败了
         for (ProducerBatch expiredBatch : expiredBatches) {
             String errorMessage = "Expiring " + expiredBatch.recordCount + " record(s) for " + expiredBatch.topicPartition
                 + ":" + (now - expiredBatch.createdMs) + " ms has passed since batch creation";

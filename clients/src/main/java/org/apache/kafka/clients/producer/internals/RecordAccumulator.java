@@ -224,6 +224,7 @@ public final class RecordAccumulator {
             // 如果第一步未追加成功，说明当前没有可用的 ProducerBatch，则需要创建一个 ProducerBatch，
             // 故先从 BufferPool 中申请 batch.size 的内存空间，为创建 ProducerBatch 做准备，
             // 如果由于 BufferPool 中未有剩余内存，则最多等待 maxTimeToBlock ，如果在指定时间内未申请到内存，则抛出异常。
+            // MAX（消息大小，batch.size）
             int size = Math.max(this.batchSize, AbstractRecords.estimateSizeInBytesUpperBound(maxUsableMagic, compression, key, value, headers));
             log.trace("Allocating a new {} byte message buffer for topic {} partition {} with remaining timeout {}ms", size, tp.topic(), tp.partition(), maxTimeToBlock);
             buffer = free.allocate(size, maxTimeToBlock);
@@ -243,6 +244,7 @@ public final class RecordAccumulator {
                 if (closed)
                     throw new KafkaException("Producer closed while send in progress");
 
+                // 理解是不是双重锁校验类似
                 RecordAppendResult appendResult = tryAppend(timestamp, key, value, headers, callback, dq, nowMs);
                 if (appendResult != null) {
                     // Somebody else found us a batch, return the one we waited for! Hopefully this doesn't happen often...
@@ -251,7 +253,7 @@ public final class RecordAccumulator {
 
                 MemoryRecordsBuilder recordsBuilder = recordsBuilder(buffer, maxUsableMagic);
                 ProducerBatch batch = new ProducerBatch(tp, recordsBuilder, nowMs);
-                // 再次追加
+                // 再次追加 ， 这时候正常都可以追加成功
                 FutureRecordMetadata future = Objects.requireNonNull(batch.tryAppend(timestamp, key, value, headers,
                         callback, nowMs));
 
@@ -661,7 +663,9 @@ public final class RecordAccumulator {
                         transactionManager.addInFlightBatch(batch);
                     }
                     batch.close();
+                    // 计数
                     size += batch.records().sizeInBytes();
+                    //
                     ready.add(batch);
 
                     batch.drained(now);
@@ -689,6 +693,7 @@ public final class RecordAccumulator {
         // 遍历所有节点，调用 drainBatchesForOneNode 方法抽取数据，
         // 组装成 Map<Integer /** brokerId */, List< ProducerBatch>> batches
         for (Node node : nodes) {
+            // 重新组装数据，按照每个node进行分批
             List<ProducerBatch> ready = drainBatchesForOneNode(cluster, node, maxSize, now);
             batches.put(node.id(), ready);
         }

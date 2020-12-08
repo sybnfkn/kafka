@@ -913,6 +913,7 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
         try {
             throwIfProducerClosed();
             // first make sure the metadata for the topic is available
+            // 首先确保这个topic的元数据是可用的
             long nowMs = time.milliseconds();
             ClusterAndWaitTime clusterAndWaitTime;
             try {
@@ -963,6 +964,7 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
             // 根据使用的版本号，按照消息协议来计算消息的长度，并是否超过指定长度，如果超过则抛出异常。
             int serializedSize = AbstractRecords.estimateSizeInBytesUpperBound(apiVersions.maxUsableProduceMagic(),
                     compressionType, serializedKey, serializedValue, headers);
+            // 消息大小校验
             ensureValidRecordSize(serializedSize);
             long timestamp = record.timestamp() == null ? nowMs : record.timestamp();
             if (log.isTraceEnabled()) {
@@ -1080,17 +1082,21 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
                 log.trace("Requesting metadata update for topic {}.", topic);
             }
             metadata.add(topic, nowMs + elapsed);
+            // 请求更新这个topic，此时只部分更新
             int version = metadata.requestUpdateForTopic(topic);
             // 唤醒sender线程
             sender.wakeup();
             try {
+                // 等待在这里
                 metadata.awaitUpdate(version, remainingWaitMs);
             } catch (TimeoutException ex) {
+                // 等待超时了
                 // Rethrow with original maxWaitMs to prevent logging exception with remainingWaitMs
                 throw new TimeoutException(
                         String.format("Topic %s not present in metadata after %d ms.",
                                 topic, maxWaitMs));
             }
+            // 取出缓存中元数据信息
             cluster = metadata.fetch();
             // 时间过去了多久了
             elapsed = time.milliseconds() - nowMs;
@@ -1105,6 +1111,7 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
             // 检测权限？
             metadata.maybeThrowExceptionForTopic(topic);
             remainingWaitMs = maxWaitMs - elapsed;
+            // 取出分区数量，判断是否拉取到元数据信息
             partitionsCount = cluster.partitionCountForTopic(topic);
         } while (partitionsCount == null || (partition != null && partition >= partitionsCount));
 
