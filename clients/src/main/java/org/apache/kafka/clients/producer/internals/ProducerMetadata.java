@@ -139,6 +139,7 @@ public class ProducerMetadata extends Metadata {
             }
         }
 
+        // 唤醒客户端等待线程
         notifyAll();
     }
 

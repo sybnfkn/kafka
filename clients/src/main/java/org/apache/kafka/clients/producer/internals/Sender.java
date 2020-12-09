@@ -343,9 +343,9 @@ public class Sender implements Runnable {
         }
 
         long currentTimeMs = time.milliseconds();
-        //
+        // 数据先写到内存中
         long pollTimeout = sendProducerData(currentTimeMs);
-
+        // 数据写到网卡
         client.poll(pollTimeout, currentTimeMs);
     }
 
