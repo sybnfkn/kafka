@@ -426,6 +426,7 @@ public class KafkaChannel implements AutoCloseable {
             return 0;
 
         midWrite = true;
+        // transportLayer 类似于jdk channel
         return send.writeTo(transportLayer);
     }
 

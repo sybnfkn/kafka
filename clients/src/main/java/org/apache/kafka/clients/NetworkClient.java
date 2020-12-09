@@ -530,7 +530,9 @@ public class NetworkClient implements KafkaClient {
                 request,
                 send,
                 now);
+        // 记录每个节点 正在进行的请求
         this.inFlightRequests.add(inFlightRequest);
+        //
         selector.send(send);
     }
 

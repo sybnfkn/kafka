@@ -345,6 +345,7 @@ public class Sender implements Runnable {
         long currentTimeMs = time.milliseconds();
         //
         long pollTimeout = sendProducerData(currentTimeMs);
+
         client.poll(pollTimeout, currentTimeMs);
     }
 
@@ -806,6 +807,7 @@ public class Sender implements Runnable {
         if (transactionManager != null && transactionManager.isTransactional()) {
             transactionalId = transactionManager.transactionalId();
         }
+        // 多个batch组成一个request
         ProduceRequest.Builder requestBuilder = ProduceRequest.Builder.forMagic(minUsedMagic, acks, timeout,
                 produceRecordsByPartition, transactionalId);
         RequestCompletionHandler callback = response -> handleProduceResponse(response, recordsByPartition, time.milliseconds());
@@ -813,6 +815,7 @@ public class Sender implements Runnable {
         String nodeId = Integer.toString(destination);
         ClientRequest clientRequest = client.newClientRequest(nodeId, requestBuilder, now, acks != 0,
                 requestTimeoutMs, null, null, callback);
+
         client.send(clientRequest, now);
         log.trace("Sent produce request to {}: {}", nodeId, requestBuilder);
     }
