@@ -27,6 +27,8 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * The set of requests which have been sent or are being sent but haven't yet received a response
+ * ****缓存已经发出去但是没有收到响应的Clientrequest****，通过Map<String, Deque<NetworkClient.InFlightRequest>> requests
+ * 通过配置可以限制InFlightRequest个数
  */
 final class InFlightRequests {
 
@@ -49,6 +51,7 @@ final class InFlightRequests {
             reqs = new ArrayDeque<>();
             this.requests.put(destination, reqs);
         }
+        // 加到头部节点
         reqs.addFirst(request);
         inFlightRequestCount.incrementAndGet();
     }
@@ -96,6 +99,10 @@ final class InFlightRequests {
      *
      * @param node Node in question
      * @return true iff we have no requests still being sent to the given node
+     * queue.peekFirst().send.completed() = true 标示当前队头请求已经发送完成
+     * 队头消息和对应KafkaChannel.send字段指向同一个消息，为了避免未发送的消息被覆盖，也不能让KafkaChannel.send 字段指向新请求
+     * queue.size() < this.maxInFlightRequestsPerConnection 为了判断InFlightRequest队列中是否堆积过多请求。
+     * 如果node对应队积累很多未响应请求，说明这个节点负载比较大，或者网络有问题，继续发送的话可能导致请求超时
      */
     public boolean canSendMore(String node) {
         Deque<NetworkClient.InFlightRequest> queue = requests.get(node);

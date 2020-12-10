@@ -383,6 +383,8 @@ public class Sender implements Runnable {
         long notReadyTimeout = Long.MAX_VALUE;
         while (iter.hasNext()) {
             Node node = iter.next();
+            // 会检查 这个node是不是准备好
+            // 其中一个是NetworkClient.send对象没有发送完毕
             if (!this.client.ready(node, now)) {
                 iter.remove();
                 /**
@@ -405,7 +407,7 @@ public class Sender implements Runnable {
         /**
          * 将抽取的 ProducerBatch 加入到 inFlightBatches 数据结构，
          * 该属性的声明如下：Map<TopicPartition, List< ProducerBatch >> inFlightBatches，
-         * 即按照 topic-分区 为键，存放已抽取的 ProducerBatch，这个属性的含义就是存储待发送的消息批次。
+         * 即按照 topic-分区 为键，存放已抽取的 ProducerBatch，这个属性的含义就是********存储待发送的消息批次*************。
          * 可以根据该数据结构得知在消息发送时**以分区为维度反馈 Sender 线程的“积压情况”**，max.in.flight.requests.per.connection 就是来控制积压的最大数量，
          * 如果积压达到这个数值，针对该队列的消息发送会限流。
          */

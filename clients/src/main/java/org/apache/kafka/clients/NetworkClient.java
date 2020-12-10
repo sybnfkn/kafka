@@ -477,6 +477,11 @@ public class NetworkClient implements KafkaClient {
             // will be slightly different for some internal requests (for
             // example, ApiVersionsRequests can be sent prior to being in
             // READY state.)
+            /**
+             * 如果此请求来自NetworkClient外部，
+             * 请验证canSendRequest。如果请求是内部请求，我们相信内部代码已完成此验证。
+             * //对于某些内部请求，验证会稍有不同（例如可以在处于 READY状态之前发送ApiVersionsRequests。
+             */
             if (!canSendRequest(nodeId, now))
                 throw new IllegalStateException("Attempt to send a request to node " + nodeId + " which is not ready.");
         }
@@ -532,7 +537,7 @@ public class NetworkClient implements KafkaClient {
                 now);
         // 记录每个节点 正在进行的请求
         this.inFlightRequests.add(inFlightRequest);
-        //
+        // 放到select的send节点上
         selector.send(send);
     }
 
@@ -1025,9 +1030,11 @@ public class NetworkClient implements KafkaClient {
 
     class DefaultMetadataUpdater implements MetadataUpdater {
 
+        // 集群元数据的meta对象
         /* the current cluster metadata */
         private final Metadata metadata;
 
+        // 定义是否有正在进行的请求，否则为null
         // Defined if there is a request in progress, null otherwise
         private InProgressData inProgress;
 
@@ -1050,13 +1057,20 @@ public class NetworkClient implements KafkaClient {
             return inProgress != null;
         }
 
+        /**
+         * 判断当前meta中保存的集群元数据是否需要更新
+         * @param now
+         * @return
+         */
         @Override
         public long maybeUpdate(long now) {
             // should we update our metadata?
             long timeToNextMetadataUpdate = metadata.timeToNextUpdate(now);
+            // 是否有正在请求获取meta的请求
             long waitForMetadataFetch = hasFetchInProgress() ? defaultRequestTimeoutMs : 0;
 
             long metadataTimeout = Math.max(timeToNextMetadataUpdate, waitForMetadataFetch);
+            // 如果=0，就会去获取metadata
             if (metadataTimeout > 0) {
                 return metadataTimeout;
             }
@@ -1162,11 +1176,12 @@ public class NetworkClient implements KafkaClient {
         private long maybeUpdate(long now, Node node) {
             String nodeConnectionId = node.idString();
 
-            // 发送请求
+            // 发送请求，先判断node是否可以发送请求
             if (canSendRequest(nodeConnectionId, now)) {
                 Metadata.MetadataRequestAndVersion requestAndVersion = metadata.newMetadataRequestAndVersion(now);
                 MetadataRequest.Builder metadataRequest = requestAndVersion.requestBuilder;
                 log.debug("Sending metadata request {} to node {}", metadataRequest, node);
+                // 发送一个内部请求
                 sendInternalMetadataRequest(metadataRequest, nodeConnectionId, now);
                 inProgress = new InProgressData(requestAndVersion.requestVersion, requestAndVersion.isPartialUpdate);
                 return defaultRequestTimeoutMs;
