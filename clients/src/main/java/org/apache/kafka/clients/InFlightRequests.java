@@ -89,6 +89,7 @@ final class InFlightRequests {
      * @return The request
      */
     public NetworkClient.InFlightRequest completeLastSent(String node) {
+        // 将inFlightrequest中对应队列第一个请求删掉
         NetworkClient.InFlightRequest inFlightRequest = requestQueue(node).pollFirst();
         inFlightRequestCount.decrementAndGet();
         return inFlightRequest;
@@ -107,6 +108,7 @@ final class InFlightRequests {
     public boolean canSendMore(String node) {
         Deque<NetworkClient.InFlightRequest> queue = requests.get(node);
         return queue == null || queue.isEmpty() ||
+                // 头节点是否已经发送完毕
                (queue.peekFirst().send.completed() && queue.size() < this.maxInFlightRequestsPerConnection);
     }
 

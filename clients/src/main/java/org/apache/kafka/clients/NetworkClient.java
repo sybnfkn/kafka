@@ -306,6 +306,7 @@ public class NetworkClient implements KafkaClient {
         if (isReady(node, now))
             return true;
 
+        // 没有准备好，则尝试重新建立链接
         if (connectionStates.canConnect(node.idString(), now))
             // if we are interested in sending to a node and we don't have a connection to it, initiate one
             initiateConnect(node, now);
@@ -437,6 +438,9 @@ public class NetworkClient implements KafkaClient {
     public boolean isReady(Node node, long now) {
         // if we need to update our metadata now declare all requests unready to make metadata requests first
         // priority
+        // 1。Metadata并未处于正在更新或者需要更新的状态
+        // 2。已经成功建立链接并且链接正常
+        // 3。InflightRequest.canSendMore 返回true
         return !metadataUpdater.isUpdateDue(now) && canSendRequest(node.idString(), now);
     }
 
@@ -577,12 +581,17 @@ public class NetworkClient implements KafkaClient {
         long updatedNow = this.time.milliseconds();
         // 然后会消息发送，消息接收、断开连接、API版本，超时等结果进行收集。
         List<ClientResponse> responses = new ArrayList<>();
+        // 处理completedSends队列（处理一些不需要response的请求）
         handleCompletedSends(responses, updatedNow);
+        // 处理CompletedReceives队列
         handleCompletedReceives(responses, updatedNow);
+        // 处理Disconnection队列
         handleDisconnections(responses, updatedNow);
+        // 处理connected列表
         handleConnections();
         handleInitiateApiVersionRequests(updatedNow);
         handleTimedOutConnections(responses, updatedNow);
+        // 处理InFlightRequest中超时队列
         handleTimedOutRequests(responses, updatedNow);
         // 并依次对结果进行唤醒，此时会将响应结果设置到  KafkaProducer#send 方法返回的凭证中，
         // 从而唤醒发送客户端，完成一次完整的消息发送流程。
@@ -594,6 +603,7 @@ public class NetworkClient implements KafkaClient {
     private void completeResponses(List<ClientResponse> responses) {
         for (ClientResponse response : responses) {
             try {
+                //
                 response.onComplete();
             } catch (Exception e) {
                 log.error("Uncaught error in request completion:", e);
@@ -853,6 +863,7 @@ public class NetworkClient implements KafkaClient {
         // if no response is expected then when the send is completed, return it
         for (Send send : this.selector.completedSends()) {
             InFlightRequest request = this.inFlightRequests.lastSent(send.destination());
+            // 这个请求不需要respoose
             if (!request.expectResponse) {
                 this.inFlightRequests.completeLastSent(send.destination());
                 responses.add(request.completed(null, now));
@@ -883,13 +894,19 @@ public class NetworkClient implements KafkaClient {
      *
      * @param responses The list of responses to update
      * @param now The current time
+     * 遍历completedReceives队列，并在InFlightRequest中删除对应的ClientRequest，并向response队列中添加对应ClientResponse
+     * 如果metadata更新请求的响应，回调用MetadataUpdater中maybehandleCompletereceive，更新metadata中记录的kafka集群元数据
      */
     private void handleCompletedReceives(List<ClientResponse> responses, long now) {
         for (NetworkReceive receive : this.selector.completedReceives()) {
+            // 获取返回响应的NodeId
             String source = receive.source();
+            // 从InfightRequest取出对应ClinetRequest
             InFlightRequest req = inFlightRequests.completeNext(source);
+
             Struct responseStruct = parseStructMaybeUpdateThrottleTimeMetrics(receive.payload(), req.header,
                 throttleTimeSensor, now);
+            // 解析响应
             AbstractResponse response = AbstractResponse.
                 parseResponse(req.header.apiKey(), responseStruct, req.header.apiVersion());
 
@@ -906,6 +923,7 @@ public class NetworkClient implements KafkaClient {
             else if (req.isInternalRequest && response instanceof ApiVersionsResponse)
                 handleApiVersionsResponse(responses, req, now, (ApiVersionsResponse) response);
             else
+                // 创建ClientResponse并添加到response集合
                 responses.add(req.completed(response, now));
         }
     }
@@ -1015,6 +1033,7 @@ public class NetworkClient implements KafkaClient {
             connectionStates.connecting(nodeConnectionId, now, node.host(), clientDnsLookup);
             InetAddress address = connectionStates.currentAddress(nodeConnectionId);
             log.debug("Initiating connection to node {} using address {}", node, address);
+            // 发起新的链接
             selector.connect(nodeConnectionId,
                     new InetSocketAddress(address, node.port()),
                     this.socketSendBuffer,

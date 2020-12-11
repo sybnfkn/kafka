@@ -77,7 +77,9 @@ final class ClusterConnectionStates {
         if (state == null)
             return true;
         else
+            // 链接是Disconnected状态，才会启动重连
             return state.state.isDisconnected() &&
+                    // 避免网络阻塞，重连不能太频繁，两次重试时间必须大于重试退避时间
                    now - state.lastConnectAttemptMs >= state.reconnectBackoffMs;
     }
 
@@ -144,6 +146,7 @@ final class ClusterConnectionStates {
         NodeConnectionState connectionState = nodeState.get(id);
         if (connectionState != null && connectionState.host().equals(host)) {
             connectionState.lastConnectAttemptMs = now;
+            // 修改正在链接
             connectionState.state = ConnectionState.CONNECTING;
             // Move to next resolved address, or if addresses are exhausted, mark node to be re-resolved
             connectionState.moveToNextAddress();
