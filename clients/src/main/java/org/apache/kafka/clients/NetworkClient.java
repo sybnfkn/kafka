@@ -583,7 +583,7 @@ public class NetworkClient implements KafkaClient {
         List<ClientResponse> responses = new ArrayList<>();
         // 处理completedSends队列（处理一些不需要response的请求）
         handleCompletedSends(responses, updatedNow);
-        // 处理CompletedReceives队列
+        // 处理CompletedReceives队列（转换为response对象，放入集合）
         handleCompletedReceives(responses, updatedNow);
         // 处理Disconnection队列
         handleDisconnections(responses, updatedNow);
@@ -963,6 +963,8 @@ public class NetworkClient implements KafkaClient {
      *
      * @param responses The list of responses that completed with the disconnection
      * @param now The current time
+     * 遍历disconnected列表，将InFlightRequests对应节点ClinetRequest清空---》对每个请求都创建ClientResponse并添加到response列表中
+     *  这里创建的ClinetResponse回标示此响应并不是服务端返回的正常响应，而是因为链接断开产生的。
      */
     private void handleDisconnections(List<ClientResponse> responses, long now) {
         for (Map.Entry<String, ChannelState> entry : this.selector.disconnected().entrySet()) {
