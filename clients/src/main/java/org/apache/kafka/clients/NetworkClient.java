@@ -343,13 +343,16 @@ public class NetworkClient implements KafkaClient {
     }
 
     private void cancelInFlightRequests(String nodeId, long now, Collection<ClientResponse> responses) {
+        // 清除
         Iterable<InFlightRequest> inFlightRequests = this.inFlightRequests.clearAll(nodeId);
+
         for (InFlightRequest request : inFlightRequests) {
             log.trace("Cancelled request {} {} with correlation id {} due to node {} being disconnected",
                     request.header.apiKey(), request.request, request.header.correlationId(), nodeId);
 
             if (!request.isInternalRequest) {
                 if (responses != null)
+                    // 自定义response
                     responses.add(request.disconnected(now, null));
             } else if (request.header.apiKey() == ApiKeys.METADATA) {
                 metadataUpdater.handleFailedRequest(now, Optional.empty());
@@ -585,16 +588,21 @@ public class NetworkClient implements KafkaClient {
         handleCompletedSends(responses, updatedNow);
         // 处理CompletedReceives队列（转换为response对象，放入集合）
         handleCompletedReceives(responses, updatedNow);
-        // 处理Disconnection队列
+        // 处理Disconnection队列 （取消InFlightRequests中请求，自定义response）
         handleDisconnections(responses, updatedNow);
-        // 处理connected列表
+        // 处理connected列表 （遍历connected列表，将ConnectionStates记录的连接修改为CONNECTED）
         handleConnections();
         handleInitiateApiVersionRequests(updatedNow);
         handleTimedOutConnections(responses, updatedNow);
-        // 处理InFlightRequest中超时队列
+        // 处理InFlightRequest中超时队列（遍历InFlightRequest集合，获取有超时请求的Node集合，请求超时就关闭连接）
         handleTimedOutRequests(responses, updatedNow);
         // 并依次对结果进行唤醒，此时会将响应结果设置到  KafkaProducer#send 方法返回的凭证中，
         // 从而唤醒发送客户端，完成一次完整的消息发送流程。
+        /**
+         * 产生所有ClientResponse已经被收集到responses列表中，之后遍历responses调用每个ClientRequest中记录进行回调
+         * 如果异常响应就重发，如果正常响应就调用每个消息自定义的callback
+         *  前面createProduceRequests方法中，组装了Callback回调对象，最终回调用了Sender.handleProduceResponse
+         */
         completeResponses(responses);
 
         return responses;
@@ -782,6 +790,7 @@ public class NetworkClient implements KafkaClient {
                                       String nodeId,
                                       long now,
                                       ChannelState disconnectState) {
+        // 更新连接状态
         connectionStates.disconnected(nodeId, now);
         apiVersions.remove(nodeId);
         nodesNeedingApiVersionsFetch.remove(nodeId);
@@ -806,6 +815,7 @@ public class NetworkClient implements KafkaClient {
                 break; // Disconnections in other states are logged at debug level in Selector
         }
 
+        // 取消InFlightRequest中的请求
         cancelInFlightRequests(nodeId, now, responses);
         metadataUpdater.handleServerDisconnect(now, nodeId, Optional.ofNullable(disconnectState.exception()));
     }
@@ -821,8 +831,10 @@ public class NetworkClient implements KafkaClient {
         List<String> nodeIds = this.inFlightRequests.nodesWithTimedOutRequests(now);
         for (String nodeId : nodeIds) {
             // close connection to the node
+            // 关闭连接
             this.selector.close(nodeId);
             log.debug("Disconnecting from node {} due to request timeout.", nodeId);
+            // 主动关闭
             processDisconnection(responses, nodeId, now, ChannelState.LOCAL_CLOSE);
         }
     }

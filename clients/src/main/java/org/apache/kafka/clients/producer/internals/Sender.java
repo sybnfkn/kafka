@@ -599,10 +599,15 @@ public class Sender implements Runnable {
 
     /**
      * Handle a produce response
+     * 请求对应的callback函数逻辑
+     *
+     * （1）如果是因为断开连接或者异常产生的响应
+     *      a.遍历ClinetRequest 的RecordBatch
      */
     private void handleProduceResponse(ClientResponse response, Map<TopicPartition, ProducerBatch> batches, long now) {
         RequestHeader requestHeader = response.requestHeader();
         int correlationId = requestHeader.correlationId();
+        // 对于连接断开而产生的ClientResponse，回重试发送请求，若不能重试，就调用其中每条消息的回调
         if (response.wasDisconnected()) {
             log.trace("Cancelled request with header {} due to node {} being disconnected",
                 requestHeader, response.destination());
@@ -650,6 +655,7 @@ public class Sender implements Runnable {
                 (batch.magic() >= RecordBatch.MAGIC_VALUE_V2 || batch.isCompressed())) {
             // If the batch is too large, we split the batch and send the split batches again. We do not decrement
             // the retry attempts in this case.
+            // 如果因为消息太大，我们回切分消息然后把发出去。而不会增加尝试次数
             log.warn(
                 "Got error produce response in correlation id {} on topic-partition {}, splitting and retrying ({} attempts left). Error: {}",
                 correlationId,
@@ -669,6 +675,7 @@ public class Sender implements Runnable {
                     batch.topicPartition,
                     this.retries - batch.attempts() - 1,
                     error);
+                // 对于可重试，直接重新添加到RecordAcculator，等待发送
                 reenqueueBatch(batch, now);
             } else if (error == Errors.DUPLICATE_SEQUENCE_NUMBER) {
                 // If we have received a duplicate sequence error, it means that the sequence number has advanced beyond
@@ -678,6 +685,7 @@ public class Sender implements Runnable {
                 // The only thing we can do is to return success to the user and not return a valid offset and timestamp.
                 completeBatch(batch, response);
             } else {
+                // 对于不能重试的话，将RecordBatch标记为"异常完成"，并释放recordBatch
                 final RuntimeException exception;
                 if (error == Errors.TOPIC_AUTHORIZATION_FAILED)
                     exception = new TopicAuthorizationException(Collections.singleton(batch.topicPartition.topic()));
@@ -812,6 +820,7 @@ public class Sender implements Runnable {
         // 多个batch组成一个request
         ProduceRequest.Builder requestBuilder = ProduceRequest.Builder.forMagic(minUsedMagic, acks, timeout,
                 produceRecordsByPartition, transactionalId);
+        // callback函数
         RequestCompletionHandler callback = response -> handleProduceResponse(response, recordsByPartition, time.milliseconds());
 
         String nodeId = Integer.toString(destination);

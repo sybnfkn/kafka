@@ -185,6 +185,7 @@ final class InFlightRequests {
         for (Map.Entry<String, Deque<NetworkClient.InFlightRequest>> requestEntry : requests.entrySet()) {
             String nodeId = requestEntry.getKey();
             Deque<NetworkClient.InFlightRequest> deque = requestEntry.getValue();
+            // 已经超时了
             if (hasExpiredRequest(now, deque))
                 nodeIds.add(nodeId);
         }

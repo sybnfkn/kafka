@@ -187,6 +187,7 @@ final class ClusterConnectionStates {
         } else {
             resetConnectionSetupTimeout(nodeState);
         }
+        // 设置为
         nodeState.state = ConnectionState.DISCONNECTED;
     }
 
