@@ -614,7 +614,7 @@ public class Sender implements Runnable {
     private void handleProduceResponse(ClientResponse response, Map<TopicPartition, ProducerBatch> batches, long now) {
         RequestHeader requestHeader = response.requestHeader();
         int correlationId = requestHeader.correlationId();
-        // 对于连接断开而产生的ClientResponse，回重试发送请求，若不能重试，就调用其中每条消息的回调
+        // 对于连接断开而产生的ClientResponse，会重试发送请求，若不能重试，就调用其中每条消息的回调
         if (response.wasDisconnected()) {
             log.trace("Cancelled request with header {} due to node {} being disconnected",
                 requestHeader, response.destination());
@@ -675,7 +675,7 @@ public class Sender implements Runnable {
             maybeRemoveAndDeallocateBatch(batch);
             this.sensors.recordBatchSplit();
         } else if (error != Errors.NONE) {
-            if (canRetry(batch, response, now)) {
+            if (canRetry(batch, response, now)) { // 判断这个消息是否可以重试
                 log.warn(
                     "Got error produce response with correlation id {} on topic-partition {}, retrying ({} attempts left). Error: {}",
                     correlationId,
@@ -705,6 +705,7 @@ public class Sender implements Runnable {
                 // thus it is not safe to reassign the sequence.
                 failBatch(batch, response, exception, batch.attempts() < this.retries);
             }
+            // metadata异常引起的
             if (error.exception() instanceof InvalidMetadataException) {
                 if (error.exception() instanceof UnknownTopicOrPartitionException) {
                     log.warn("Received unknown topic or partition error in produce request on partition {}. The " +
@@ -726,7 +727,9 @@ public class Sender implements Runnable {
     }
 
     private void reenqueueBatch(ProducerBatch batch, long currentTimeMs) {
+        // 重新加入dequeue中
         this.accumulator.reenqueue(batch, currentTimeMs);
+        // 从inflightrequests中移除
         maybeRemoveFromInflightBatches(batch);
         this.sensors.recordRetries(batch.topicPartition.topic(), batch.recordCount);
     }
@@ -771,7 +774,7 @@ public class Sender implements Runnable {
      */
     private boolean canRetry(ProducerBatch batch, ProduceResponse.PartitionResponse response, long now) {
         return !batch.hasReachedDeliveryTimeout(accumulator.getDeliveryTimeoutMs(), now) &&
-            batch.attempts() < this.retries &&
+            batch.attempts() < this.retries /*重试次数*/ &&
             !batch.isDone() &&
             (transactionManager == null ?
                     response.error.exception() instanceof RetriableException :

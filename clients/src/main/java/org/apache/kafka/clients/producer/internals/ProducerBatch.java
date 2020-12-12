@@ -209,6 +209,7 @@ public final class ProducerBatch {
         }
 
         if (this.finalState.compareAndSet(null, tryFinalState)) {
+            // 执行回调函数
             completeFutureAndFireCallbacks(baseOffset, logAppendTime, exception);
             return true;
         }
@@ -235,6 +236,7 @@ public final class ProducerBatch {
         produceFuture.set(baseOffset, logAppendTime, exception);
 
         // execute callbacks
+        // 执行回调
         for (Thunk thunk : thunks) {
             try {
                 if (exception == null) {
