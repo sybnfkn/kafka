@@ -602,7 +602,14 @@ public class Sender implements Runnable {
      * 请求对应的callback函数逻辑
      *
      * （1）如果是因为断开连接或者异常产生的响应
-     *      a.遍历ClinetRequest 的RecordBatch
+     *      a.遍历ClinetRequest 的RecordBatch，尝试将RecordBatch重新加入RecordAccumulator，重新发送
+     *      b.如果异常类型不允许重试或者重试次数达到上限，就执行RecordBatch.done方法，此方法会循环调用RecordBatch中每个消息的callback函数，并将RecordBatch的produceFuture设置为
+     *          "异常完成"。最后释放掉RecortdBatch底层的ByteBuffer
+     *      c.最后根据异常类型，决定是否设置更新Metadata标示
+     * （2）如果服务端正常响应或者不需要响应的情况
+     *      a.解析响应
+     *      b.遍历对应ClientRequest中的RecordBatch，执行RecordBatch.done方法
+     *      c.释放Recordbatch底层的ByteBuffer
      */
     private void handleProduceResponse(ClientResponse response, Map<TopicPartition, ProducerBatch> batches, long now) {
         RequestHeader requestHeader = response.requestHeader();
