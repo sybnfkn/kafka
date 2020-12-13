@@ -570,26 +570,44 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
     final KafkaConsumerMetrics kafkaConsumerMetrics;
 
     private Logger log;
+    // consumer唯一标示
+    // 发出请求时传递给服务器的id字符串。设置该值的目的是方便在服务器端请求日志中包含逻辑应用程序名称
+    // ，从而能够跟踪ip/端口之外的请求源。该值可以设置为应用名称。
     private final String clientId;
+    // 消费组ID。同一个消费组内的多个消费者共同消费一个主题下的消息。
     private final Optional<String> groupId;
+    // 控制者consumer和服务端GroupCoordinator之间的通讯逻辑
+    // consumer和服务端GroupCoordinator通讯门户
+    // 消费协调器
     private final ConsumerCoordinator coordinator;
     private final Deserializer<K> keyDeserializer;
     private final Deserializer<V> valueDeserializer;
+    // 负责从服务端获取消息
     private final Fetcher<K, V> fetcher;
+    // 在消息通过poll方法返回给用户之前进行拦截和修改
     private final ConsumerInterceptors<K, V> interceptors;
 
     private final Time time;
+    // 负责消费者和kafka服务端网络通讯
     private final ConsumerNetworkClient client;
+    // 维护了消费者的消费状态
+    // 用于管理订阅状态的类，用于跟踪 topics, partitions, offsets 等信息。
     private final SubscriptionState subscriptions;
+    // 元信息
     private final ConsumerMetadata metadata;
+    // 如果向 broker 发送请求失败后，发起重试之前需要等待的间隔时间，通过属性 retry.backoff.ms　指定。
     private final long retryBackoffMs;
+    // 一次请求的超时时间。
     private final long requestTimeoutMs;
+    // 为所有可能阻塞的API设置一个默认的超时时间。
     private final int defaultApiTimeoutMs;
     private volatile boolean closed = false;
+    // 分区分配算法（分区负载算法）。
     private List<ConsumerPartitionAssignor> assignors;
 
     // currentThread holds the threadId of the current thread accessing KafkaConsumer
-    // and is used to prevent multi-threaded access
+    // and is used to prevent multi-threaded
+    // 检测是否有多线程并发操作kafkaconsumer
     private final AtomicLong currentThread = new AtomicLong(NO_CURRENT_THREAD);
     // refcount is used to allow reentrant access by the thread who has acquired currentThread
     private final AtomicInteger refcount = new AtomicInteger(0);

@@ -38,26 +38,31 @@ public interface Consumer<K, V> extends Closeable {
 
     /**
      * @see KafkaConsumer#assignment()
+     * 获取该消费者的队列分配列表。
      */
     Set<TopicPartition> assignment();
 
     /**
      * @see KafkaConsumer#subscription()
+     * 获取该消费者的订阅信息。
      */
     Set<String> subscription();
 
     /**
      * @see KafkaConsumer#subscribe(Collection)
+     * 订阅指定topic，并为消费者自动分配分区
      */
     void subscribe(Collection<String> topics);
 
     /**
      * @see KafkaConsumer#subscribe(Collection, ConsumerRebalanceListener)
+     * 订阅主题，并指定队列重平衡的监听器。
      */
     void subscribe(Collection<String> topics, ConsumerRebalanceListener callback);
 
     /**
      * @see KafkaConsumer#assign(Collection)
+     * 取代 subscription，手动指定消费哪些队列。
      */
     void assign(Collection<TopicPartition> partitions);
 
@@ -73,6 +78,7 @@ public interface Consumer<K, V> extends Closeable {
 
     /**
      * @see KafkaConsumer#unsubscribe()
+     * 取消订阅关系。
      */
     void unsubscribe();
 
@@ -84,26 +90,31 @@ public interface Consumer<K, V> extends Closeable {
 
     /**
      * @see KafkaConsumer#poll(Duration)
+     * 拉取消息，是 KafkaConsumer 的核心方法
      */
     ConsumerRecords<K, V> poll(Duration timeout);
 
     /**
      * @see KafkaConsumer#commitSync()
+     * 同步提交消费进度，为本批次的消费提交，
      */
     void commitSync();
 
     /**
      * @see KafkaConsumer#commitSync(Duration)
+     * 同步提交消费进度，可设置超时时间。
      */
     void commitSync(Duration timeout);
 
     /**
      * @see KafkaConsumer#commitSync(Map)
+     * 显示同步提交消费进度， offsets 指明需要提交消费进度的信息
      */
     void commitSync(Map<TopicPartition, OffsetAndMetadata> offsets);
 
     /**
      * @see KafkaConsumer#commitSync(Map, Duration)
+     * 显示同步提交消费进度，带超时间。
      */
     void commitSync(final Map<TopicPartition, OffsetAndMetadata> offsets, final Duration timeout);
     /**
@@ -123,6 +134,7 @@ public interface Consumer<K, V> extends Closeable {
 
     /**
      * @see KafkaConsumer#seek(TopicPartition, long)
+     * 重置 consumer#poll 方法下一次拉消息的偏移量。
      */
     void seek(TopicPartition partition, long offset);
 
@@ -133,16 +145,19 @@ public interface Consumer<K, V> extends Closeable {
 
     /**
      * @see KafkaConsumer#seekToBeginning(Collection)
+     * 将 poll 方法下一次的拉取偏移量设置为队列的初始偏移量。
      */
     void seekToBeginning(Collection<TopicPartition> partitions);
 
     /**
      * @see KafkaConsumer#seekToEnd(Collection)
+     * 将 poll 方法下一次的拉取偏移量设置为队列的最大偏移量
      */
     void seekToEnd(Collection<TopicPartition> partitions);
 
     /**
      * @see KafkaConsumer#position(TopicPartition)
+     * 获取将被拉取的偏移量。
      */
     long position(TopicPartition partition);
     
@@ -165,6 +180,7 @@ public interface Consumer<K, V> extends Closeable {
 
     /**
      * @see KafkaConsumer#committed(Set)
+     * 获取指定分区已提交的偏移量。
      */
     Map<TopicPartition, OffsetAndMetadata> committed(Set<TopicPartition> partitions);
 
@@ -180,6 +196,7 @@ public interface Consumer<K, V> extends Closeable {
 
     /**
      * @see KafkaConsumer#partitionsFor(String)
+     * 获取主题的路由信息。
      */
     List<PartitionInfo> partitionsFor(String topic);
 
@@ -190,6 +207,7 @@ public interface Consumer<K, V> extends Closeable {
 
     /**
      * @see KafkaConsumer#listTopics()
+     * 获取所有 topic 的路由信息。
      */
     Map<String, List<PartitionInfo>> listTopics();
 
@@ -200,21 +218,25 @@ public interface Consumer<K, V> extends Closeable {
 
     /**
      * @see KafkaConsumer#paused()
+     * 获取已挂起的分区信息。
      */
     Set<TopicPartition> paused();
 
     /**
      * @see KafkaConsumer#pause(Collection)
+     * 挂起分区，下一次 poll 方法将不会返回这些分区的消息。
      */
     void pause(Collection<TopicPartition> partitions);
 
     /**
      * @see KafkaConsumer#resume(Collection)
+     * 恢复挂起的分区。
      */
     void resume(Collection<TopicPartition> partitions);
 
     /**
      * @see KafkaConsumer#offsetsForTimes(Map)
+     * 根据时间戳查找最近的一条消息的偏移量。
      */
     Map<TopicPartition, OffsetAndTimestamp> offsetsForTimes(Map<TopicPartition, Long> timestampsToSearch);
 
@@ -225,6 +247,7 @@ public interface Consumer<K, V> extends Closeable {
 
     /**
      * @see KafkaConsumer#beginningOffsets(Collection)
+     * 查询指定分区当前最小的偏移量。
      */
     Map<TopicPartition, Long> beginningOffsets(Collection<TopicPartition> partitions);
 
@@ -235,6 +258,7 @@ public interface Consumer<K, V> extends Closeable {
 
     /**
      * @see KafkaConsumer#endOffsets(Collection)
+     * 查询指定分区当前最大的偏移量。
      */
     Map<TopicPartition, Long> endOffsets(Collection<TopicPartition> partitions);
 
@@ -255,6 +279,7 @@ public interface Consumer<K, V> extends Closeable {
 
     /**
      * @see KafkaConsumer#close()
+     * 关闭消费者。
      */
     void close();
 
@@ -271,6 +296,7 @@ public interface Consumer<K, V> extends Closeable {
 
     /**
      * @see KafkaConsumer#wakeup()
+     * 唤醒消费者。
      */
     void wakeup();
 

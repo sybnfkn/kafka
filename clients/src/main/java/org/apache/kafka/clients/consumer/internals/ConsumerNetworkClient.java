@@ -57,7 +57,11 @@ public class ConsumerNetworkClient implements Closeable {
     // the mutable state of this class is protected by the object's monitor (excluding the wakeup
     // flag and the request completion queue below).
     private final Logger log;
+    // networkclient对象
     private final KafkaClient client;
+    // 缓冲队列，Map<Node,List<ClientRequest>>
+    // key：node节点
+    // value：发往Node的ClientRequest集合
     private final UnsentRequests unsent = new UnsentRequests();
     private final Metadata metadata;
     private final Time time;
@@ -77,6 +81,7 @@ public class ConsumerNetworkClient implements Closeable {
 
     // this flag allows the client to be safely woken up without waiting on the lock above. It is
     // atomic to avoid the need to acquire the lock above in order to enable it concurrently.
+    // 由调用Kafkaconsumer对象的消费者线程之外的其他线程设置，表示要中断Kafkaconsumer线程
     private final AtomicBoolean wakeup = new AtomicBoolean(false);
 
     public ConsumerNetworkClient(LogContext logContext,
@@ -252,7 +257,14 @@ public class ConsumerNetworkClient implements Closeable {
             handlePendingDisconnects();
 
             // send all the requests we can send now
+
+            /**
+             * 对每个node节点，循环遍历对应的clientrequest列表，每次循环都调用networkclient.ready()方法检测消费者和此节点之间的连接
+             * 以及发送请求的条件。如果符合发送条件，调用send方法将请求放入InFlightRequests队列中等待响应。也放入KafkaChannel的send字段中等待发送，并将
+             * 消息从列表中删除
+             */
             long pollDelayMs = trySend(timer.currentTimeMs());
+
 
             // check whether the poll is still needed by the caller. Note that if the expected completion
             // condition becomes satisfied after the call to shouldBlock() (because of a fired completion
@@ -262,6 +274,8 @@ public class ConsumerNetworkClient implements Closeable {
                 long pollTimeout = Math.min(timer.remainingMs(), pollDelayMs);
                 if (client.inFlightRequestCount() == 0)
                     pollTimeout = Math.min(pollTimeout, retryBackoffMs);
+                // 将kafkachannel.send字段指定消息发送出去。除此之外，poll方法可能会更新Metadata使用一系列handle方法处理请求响应，连接断开，超时等情况，比ing回调每个请求
+                // 回调函数
                 client.poll(pollTimeout, timer.currentTimeMs());
             } else {
                 client.poll(0, timer.currentTimeMs());
@@ -271,6 +285,11 @@ public class ConsumerNetworkClient implements Closeable {
             // handle any disconnects by failing the active requests. note that disconnects must
             // be checked immediately following poll since any subsequent call to client.ready()
             // will reset the disconnect status
+            /**
+             * 检测消费者和每个node之间连接状态，当检测到连接断开的node时，会将其在unsent集合中对应的全部Clientrtequest对象清理掉
+             * 之后调用这些ClientRequest回调函数。
+             * 断开连接的node所已经发送出去的请求，由networkclient进行异常处理
+             */
             checkDisconnects(timer.currentTimeMs());
             if (!disableWakeup) {
                 // trigger wakeups after checking for disconnects so that the callbacks will be ready
@@ -278,13 +297,22 @@ public class ConsumerNetworkClient implements Closeable {
                 maybeTriggerWakeup();
             }
             // throw InterruptException if this thread is interrupted
+            // 线程如果被中断了，跑出异常
             maybeThrowInterruptException();
 
             // try again to send requests since buffer space may have been
             // cleared or a connect finished in the poll
+            /**
+             * 上面的poll方法，其中可能将KafkaChannel.send字段请求发送出去了，也可能已经新建了和某些node的网络连接
+             * 所以这里尝试再调用一次
+             */
             trySend(timer.currentTimeMs());
 
             // fail requests that couldn't be sent if they have expired
+            /**
+             * 处理unsent中超时的请求。
+             * 遍历整个unsent集合，检测每个ClientRequest是否超时，调用ClientRequest回调函数，将从unsent集合中删除
+             */
             failExpiredRequests(timer.currentTimeMs());
 
             // clean unsent requests collection to keep the map from growing indefinitely
@@ -495,8 +523,11 @@ public class ConsumerNetworkClient implements Closeable {
 
             while (iterator.hasNext()) {
                 ClientRequest request = iterator.next();
+                // 检测是否可以发送请求
                 if (client.ready(node, now)) {
+                    // 等待发送请求
                     client.send(request, now);
+                    // 从unsent集合中删除次请求
                     iterator.remove();
                 } else {
                     // try next node when current node is not ready
