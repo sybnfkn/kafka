@@ -133,25 +133,40 @@ import static java.util.Collections.emptyList;
 public class Fetcher<K, V> implements Closeable {
     private final Logger log;
     private final LogContext logContext;
+    // 消费端网络客户端，Kafka 负责网络通讯实现类。
     private final ConsumerNetworkClient client;
     private final Time time;
+    // 一次消息拉取需要拉取的最小字节数，如果不组，会阻塞，默认值为1字节，如果增大这个值会增大吞吐，但会增加延迟，可以通参数 fetch.min.bytes 改变其默认值。
     private final int minBytes;
+    // 一次消息拉取允许拉取的最大字节数，但这不是绝对的，如果一个分区的第一批记录超过了该值，也会返回。默认为50M,可通过参数 fetch.max.bytes 改变其默认值。同时不能超过 broker的配置参数(message.max.bytes) 和 主题级别的配置(max.message.bytes)。
     private final int maxBytes;
+    // 在 broker 如果符合拉取条件的数据小于 minBytes 时阻塞的时间，默认为 500ms ，可通属性 fetch.max.wait.ms 进行定制。
     private final int maxWaitMs;
+    // 每一个分区返回的最大消息字节数，如果分区中的第一批消息大于 fetchSize 也会返回。
     private final int fetchSize;
+    // 失败重试后需要阻塞的时间，默认为 100 ms，可通过参数 retry.backoff.ms 定制。
     private final long retryBackoffMs;
+    // 客户端向 broker 发送请求最大的超时时间，默认为 30s，可以通过 request.timeout.ms 参数定制。
     private final long requestTimeoutMs;
+    // 单次拉取返回的最大记录数，默认值 500，可通过参数 max.poll.records 进行定制。
     private final int maxPollRecords;
+    // 是否检查消息的 crcs 校验和，默认为 true，可通过参数 check.crcs 进行定制。
     private final boolean checkCrcs;
     private final String clientRackId;
+    // 元数据
     private final ConsumerMetadata metadata;
+    // 消息拉取的统计服务类。
     private final FetchManagerMetrics sensors;
+    // 订阅信息状态。
     private final SubscriptionState subscriptions;
+    // 已完成的 Fetch 的请求结果，待消费端从中取出数据。
     private final ConcurrentLinkedQueue<CompletedFetch> completedFetches;
     private final BufferSupplier decompressionBufferSupplier = BufferSupplier.create();
     private final Deserializer<K> keyDeserializer;
     private final Deserializer<V> valueDeserializer;
+    // Kafka的隔离级别（与事务消息相关），后续在研究其事务相关时再进行探讨。
     private final IsolationLevel isolationLevel;
+    // 拉取会话监听器。
     private final Map<Integer, FetchSessionHandler> sessionHandlers;
     private final AtomicReference<RuntimeException> cachedListOffsetsException = new AtomicReference<>();
     private final AtomicReference<RuntimeException> cachedOffsetForLeaderException = new AtomicReference<>();
@@ -249,9 +264,10 @@ public class Fetcher<K, V> implements Closeable {
     public synchronized int sendFetches() {
         // Update metrics in case there was an assignment change
         sensors.maybeUpdateAssignment(subscriptions);
-
-        Map<Node, FetchSessionHandler.FetchRequestData> fetchRequestMap = prepareFetchRequests();
-        for (Map.Entry<Node, FetchSessionHandler.FetchRequestData> entry : fetchRequestMap.entrySet()) {
+        // 通过调用 Fetcher 的 prepareFetchRequests 方法按节点组装拉取请求
+        Map<Node, FetchSessionHandler.FetchRequestData> fetchRequestMap = prepareFetchRequests(); // 1
+        // 遍历上面的待发请求，进一步组装请求。下面就是分节点发送拉取请求
+        for (Map.Entry<Node, FetchSessionHandler.FetchRequestData> entry : fetchRequestMap.entrySet()) { // 2
             final Node fetchTarget = entry.getKey();
             final FetchSessionHandler.FetchRequestData data = entry.getValue();
             final FetchRequest.Builder request = FetchRequest.Builder
@@ -259,21 +275,27 @@ public class Fetcher<K, V> implements Closeable {
                     .isolationLevel(isolationLevel)
                     .setMaxBytes(this.maxBytes)
                     .metadata(data.metadata())
-                    .toForget(data.toForget())
+                    .toForget(data.toForget()) // 3 构建 FetchRequest 拉取请求对象。
                     .rackId(clientRackId);
 
             if (log.isDebugEnabled()) {
                 log.debug("Sending {} {} to broker {}", isolationLevel, data.toString(), fetchTarget);
             }
-            RequestFuture<ClientResponse> future = client.send(fetchTarget, request);
+            // 调用 NetworkClient 的 send 方法将其发送到发送缓存区，
+            RequestFuture<ClientResponse> future = client.send(fetchTarget, request); // 4
             // We add the node to the set of nodes with pending fetch requests before adding the
             // listener because the future may have been fulfilled on another thread (e.g. during a
             // disconnection being handled by the heartbeat thread) which will mean the listener
             // will be invoked synchronously.
             this.nodesWithPendingFetchRequests.add(entry.getKey().id());
             future.addListener(new RequestFutureListener<ClientResponse>() {
+                /**
+                 * 这里会注册事件监听器，当消息从 broker 拉取到本地后触发回调，即消息拉取请求收到返回结果后会将返回结果放入到completedFetches 中（代码@6），
+                 * 这就和上文消息拉取时 Fetcher 的 fetchedRecords 方法形成闭环。
+                 * @param resp
+                 */
                 @Override
-                public void onSuccess(ClientResponse resp) {
+                public void onSuccess(ClientResponse resp) { // 5
                     synchronized (Fetcher.this) {
                         try {
                             @SuppressWarnings("unchecked")
@@ -319,7 +341,7 @@ public class Fetcher<K, V> implements Closeable {
                                     short responseVersion = resp.requestHeader().apiVersion();
 
                                     completedFetches.add(new CompletedFetch(partition, partitionData,
-                                            metricAggregator, batches, fetchOffset, responseVersion));
+                                            metricAggregator, batches, fetchOffset, responseVersion)); // 6
                                 }
                             }
 
@@ -330,8 +352,9 @@ public class Fetcher<K, V> implements Closeable {
                     }
                 }
 
+                // 消息拉取异常处理。
                 @Override
-                public void onFailure(RuntimeException e) {
+                public void onFailure(RuntimeException e) { // 7
                     synchronized (Fetcher.this) {
                         try {
                             FetchSessionHandler handler = sessionHandler(fetchTarget.id());
@@ -599,13 +622,32 @@ public class Fetcher<K, V> implements Closeable {
      * @throws TopicAuthorizationException If there is TopicAuthorization error in fetchResponse.
      */
     public Map<TopicPartition, List<ConsumerRecord<K, V>>> fetchedRecords() {
-        Map<TopicPartition, List<ConsumerRecord<K, V>>> fetched = new HashMap<>();
+        /**
+         * Map>> fetched 按分区存放已拉取的消息，返回给客户端进行处理。
+         * recordsRemaining：剩余可拉取的消息条数。
+         */
+        Map<TopicPartition, List<ConsumerRecord<K, V>>> fetched = new HashMap<>(); // 1
         Queue<CompletedFetch> pausedCompletedFetches = new ArrayDeque<>();
         int recordsRemaining = maxPollRecords;
 
         try {
-            while (recordsRemaining > 0) {
-                if (nextInLineFetch == null || nextInLineFetch.isConsumed) {
+            /**
+             * 循环去取已经完成了 Fetch 请求的消息，该 while 循环有两个跳出条件：
+             *1。如果拉取的消息已经达到一次拉取的最大消息条数，则跳出循环。
+             *2。缓存中所有拉取结果已处理。
+             */
+            while (recordsRemaining > 0) { // 2
+                /**
+                 * 代码@3、@4 主要完成从缓存中解析数据的两个步骤，初次运行的时候，会进入分支@3，然后从 调用 initializeCompletedFetch 解析成 PartitionRecords 对象，
+                 * 然后代码@4的职责就是从解析 PartitionRecords ，将消息封装成 ConsumerRecord，返回给消费端线程处理
+                 */
+
+                /**
+                 * 1。首先从 completedFetches (Fetch请求的返回结果) 列表中获取一个 Fetcher 请求，主要使用的 Queue 的 peek()方法，并不会从该队列中移除该元素。
+                 *2。然后调用 initializeCompletedFetch 对处理结果进行解析返回 PartitionRecords。
+                 *3。处理成功后，调用 Queue 的方法将已处理过的 Fetcher结果移除。
+                 */
+                if (nextInLineFetch == null || nextInLineFetch.isConsumed) { // 3
                     CompletedFetch records = completedFetches.peek();
                     if (records == null) break;
 
@@ -634,7 +676,8 @@ public class Fetcher<K, V> implements Closeable {
                     log.debug("Skipping fetching records for assigned partition {} because it is paused", nextInLineFetch.partition);
                     pausedCompletedFetches.add(nextInLineFetch);
                     nextInLineFetch = null;
-                } else {
+                } else { // 4
+                    // 调用 fetchRecords 方法，按分区组装成 Map>>，供消费者处理，例如供业务处理。
                     List<ConsumerRecord<K, V>> records = fetchRecords(nextInLineFetch, recordsRemaining);
 
                     if (!records.isEmpty()) {
@@ -668,22 +711,28 @@ public class Fetcher<K, V> implements Closeable {
     }
 
     private List<ConsumerRecord<K, V>> fetchRecords(CompletedFetch completedFetch, int maxRecords) {
-        if (!subscriptions.isAssigned(completedFetch.partition)) {
+        // 从 PartitionRecords 中提取消息之前，再次判断订阅消息中是否包含当前分区，如果不包含，则使用 debug 打印日志，很有可能是发生了重平衡。
+        if (!subscriptions.isAssigned(completedFetch.partition)) { // 1
             // this can happen when a rebalance happened before fetched records are returned to the consumer's poll call
             log.debug("Not returning fetched records for partition {} since it is no longer assigned",
                     completedFetch.partition);
-        } else if (!subscriptions.isFetchable(completedFetch.partition)) {
+        } else if (!subscriptions.isFetchable(completedFetch.partition)) { // 2
+            // 是否允许拉取，如果用户主动暂停消费，则忽略本次拉取的消息。备注：Kafka 消费端如果消费太快，可以进行限流。
             // this can happen when a partition is paused before fetched records are returned to the consumer's
             // poll call or if the offset is being reset
             log.debug("Not returning fetched records for assigned partition {} since it is no longer fetchable",
                     completedFetch.partition);
         } else {
-            FetchPosition position = subscriptions.position(completedFetch.partition);
+            // 从本地消费者缓存中获取该队列已消费的偏移量，在发送拉取消息时，就是从该偏移量开始拉取的
+            FetchPosition position = subscriptions.position(completedFetch.partition); // 3
+            //
             if (position == null) {
                 throw new IllegalStateException("Missing position for fetchable partition " + completedFetch.partition);
             }
 
-            if (completedFetch.nextFetchOffset == position.offset) {
+            // 如果本地缓存已消费偏移量与从服务端拉回的起始偏移量相等的话，则认为是一个有效拉取，否则则认为是一个过期的拉取，
+            // 该批消息已被消费，见代码@5。如果是一个有效请求，则使用 sensors 收集统计信息，并返回拉取到的消息， 返回结果被封装在 List> 。
+            if (completedFetch.nextFetchOffset == position.offset) { // 4
                 List<ConsumerRecord<K, V>> partRecords = completedFetch.fetchRecords(maxRecords);
 
                 log.trace("Returning {} fetched records at offset {} for assigned partition {}",
@@ -708,7 +757,7 @@ public class Fetcher<K, V> implements Closeable {
                 }
 
                 return partRecords;
-            } else {
+            } else { // 5
                 // these records aren't next in line based on the last consumed position, ignore them
                 // they must be from an obsolete request
                 log.debug("Ignoring fetched records for {} at offset {} since the current position is {}",
@@ -1155,14 +1204,17 @@ public class Fetcher<K, V> implements Closeable {
 
         long currentTimeMs = time.milliseconds();
 
-        for (TopicPartition partition : fetchablePartitions()) {
+        // 首先通过调用 fetchablePartitions() 获取可发起拉取任务的分区信息
+        for (TopicPartition partition : fetchablePartitions()) { // 1
             FetchPosition position = this.subscriptions.position(partition);
             if (position == null) {
                 throw new IllegalStateException("Missing position for fetchable partition " + partition);
             }
 
-            Optional<Node> leaderOpt = position.currentLeader.leader;
-            if (!leaderOpt.isPresent()) {
+            // 如果该分区在客户端本地缓存中获取该分区的 Leader 节点信息。
+            Optional<Node> leaderOpt = position.currentLeader.leader; // 2
+            // 如果其 Leader 节点信息为空，则发起更新元数据请求，本次拉取任务将不会包含该分区。
+            if (!leaderOpt.isPresent()) { // 3
                 log.debug("Requesting metadata update for partition {} since the position {} is missing the current leader node", partition, position);
                 metadata.requestUpdate();
                 continue;
@@ -1170,17 +1222,20 @@ public class Fetcher<K, V> implements Closeable {
 
             // Use the preferred read replica if set, otherwise the position's leader
             Node node = selectReadReplica(partition, leaderOpt.get(), currentTimeMs);
-            if (client.isUnavailable(node)) {
+            // 如果客户端与该分区的 Leader 连接为完成，如果是因为权限的原因则抛出ACL相关异常，否则打印日志，本次拉取请求不会包含该分区
+            if (client.isUnavailable(node)) { // 4
                 client.maybeThrowAuthFailure(node);
 
                 // If we try to send during the reconnect backoff window, then the request is just
                 // going to be failed anyway before being sent, so skip the send for now
                 log.trace("Skipping fetch for partition {} because node {} is awaiting reconnect backoff", partition, node);
-            } else if (this.nodesWithPendingFetchRequests.contains(node.id())) {
+            } else if (this.nodesWithPendingFetchRequests.contains(node.id())) { // 5
+                // 判断该节点是否有挂起的拉取请求，即发送缓存区中是待发送的请求,如果有，本次将不会被拉取。
                 log.trace("Skipping fetch for partition {} because previous request to {} has not been processed", partition, node);
             } else {
                 // if there is a leader and no in-flight requests, issue a new fetch
-                FetchSessionHandler.Builder builder = fetchable.get(node);
+                FetchSessionHandler.Builder builder = fetchable.get(node); // 7
+                // 构建拉取请求，分节点组织请求。
                 if (builder == null) {
                     int id = node.id();
                     FetchSessionHandler handler = sessionHandler(id);
@@ -1235,14 +1290,27 @@ public class Fetcher<K, V> implements Closeable {
         Errors error = partition.error();
 
         try {
-            if (!subscriptions.hasValidPosition(tp)) {
+            /**
+             * 判断该分区是否可拉取，如果不可拉取，则忽略这批拉取的消息，判断是可拉取的要点如下：
+             *1.当前消费者负载的队列包含该分区。
+             *2.当前消费者针对该队列并没有被用户设置为暂停（消费端限流）。
+             *3.当前消费者针对该队列有有效的拉取偏移量。
+             */
+            if (!subscriptions.hasValidPosition(tp)) { // 1
                 // this can happen when a rebalance happened while fetch is still in-flight
                 log.debug("Ignoring fetched records for partition {} since it no longer has valid position", tp);
-            } else if (error == Errors.NONE) {
+            } else if (error == Errors.NONE) { // 2
+                /**
+                 * 该分支是处理正常返回的相关逻辑。其关键点如下：
+                 *1.如果当前针对该队列的消费位移 与 发起 fetch 请求时的 偏移量不一致，则认为本次拉取非法，直接返回 null ，如代码@21。
+                 *2.从返回结构中获取本次拉取的数据，使用数据迭代器，其基本数据单位为 RecordBatch，即一个发送批次，如代码@22。
+                 *3.如果返回结果中没有包含至少一个批次的消息，但是 sizeInBytes 又大于0，则直接抛出错误，根据服务端的版本，其错误信息有所不同，但主要是建议我们如何处理，如果 broker 的版本低于 0.10.1.0，则建议升级 broker 版本，或增大客户端的 fetch size，这种错误是因为一个批次的消息已经超过了本次拉取允许的最大拉取消息大小，如代码@23。
+                 *4.依次更新消费者本地关于该队列的订阅缓存信息的 highWatermark、logStartOffset、lastStableOffset。
+                 */
                 // we are interested in this fetch only if the beginning offset matches the
                 // current consumed position
                 FetchPosition position = subscriptions.position(tp);
-                if (position == null || position.offset != fetchOffset) {
+                if (position == null || position.offset != fetchOffset) { // 21
                     log.debug("Discarding stale fetch response for partition {} since its offset {} does not match " +
                             "the expected offset {}", tp, fetchOffset, position);
                     return null;
@@ -1250,10 +1318,10 @@ public class Fetcher<K, V> implements Closeable {
 
                 log.trace("Preparing to read {} bytes of data for partition {} with offset {}",
                         partition.records().sizeInBytes(), tp, position);
-                Iterator<? extends RecordBatch> batches = partition.records().batches().iterator();
+                Iterator<? extends RecordBatch> batches = partition.records().batches().iterator(); // 22
                 completedFetch = nextCompletedFetch;
 
-                if (!batches.hasNext() && partition.records().sizeInBytes() > 0) {
+                if (!batches.hasNext() && partition.records().sizeInBytes() > 0) { // 23
                     if (completedFetch.responseVersion < 3) {
                         // Implement the pre KIP-74 behavior of throwing a RecordTooLargeException.
                         Map<TopicPartition, Long> recordTooLargePartitions = Collections.singletonMap(tp, fetchOffset);
@@ -1271,17 +1339,17 @@ public class Fetcher<K, V> implements Closeable {
                     }
                 }
 
-                if (partition.highWatermark() >= 0) {
+                if (partition.highWatermark() >= 0) { // 24
                     log.trace("Updating high watermark for partition {} to {}", tp, partition.highWatermark());
                     subscriptions.updateHighWatermark(tp, partition.highWatermark());
                 }
 
-                if (partition.logStartOffset() >= 0) {
+                if (partition.logStartOffset() >= 0) { // 25
                     log.trace("Updating log start offset for partition {} to {}", tp, partition.logStartOffset());
                     subscriptions.updateLogStartOffset(tp, partition.logStartOffset());
                 }
 
-                if (partition.lastStableOffset() >= 0) {
+                if (partition.lastStableOffset() >= 0) { // 26
                     log.trace("Updating last stable offset for partition {} to {}", tp, partition.lastStableOffset());
                     subscriptions.updateLastStableOffset(tp, partition.lastStableOffset());
                 }
@@ -1296,17 +1364,25 @@ public class Fetcher<K, V> implements Closeable {
                 }
 
                 nextCompletedFetch.initialized = true;
-            } else if (error == Errors.NOT_LEADER_OR_FOLLOWER ||
-                       error == Errors.REPLICA_NOT_AVAILABLE ||
-                       error == Errors.KAFKA_STORAGE_ERROR ||
+            } else if (error == Errors.NOT_LEADER_OR_FOLLOWER  ||
+                       error == Errors.REPLICA_NOT_AVAILABLE /*该分区副本之间无法复制*/ ||
+                       error == Errors.KAFKA_STORAGE_ERROR /*存储异常*/ ||
                        error == Errors.FENCED_LEADER_EPOCH ||
-                       error == Errors.OFFSET_NOT_AVAILABLE) {
+                       error == Errors.OFFSET_NOT_AVAILABLE) { // 3
+                // 如果出现这种错误码，则使用 debug 打印错误日志，并且向服务端请求元数据并更新本地缓存。
+                // Kafka 认为上述错误是可恢复的，而且对消费不会造成太大影响，故只是用 debug 打印日志，然后更新本地缓存即可。
                 log.debug("Error in fetch for partition {}: {}", tp, error.exceptionName());
                 this.metadata.requestUpdate();
-            } else if (error == Errors.UNKNOWN_TOPIC_OR_PARTITION) {
+            } else if (error == Errors.UNKNOWN_TOPIC_OR_PARTITION) { // 4
+                // 如果出现 UNKNOWN_TOPIC_OR_PARTITION 未知主题与分区时，则使用 warn 级别输出错误日志，并更新元数据
                 log.warn("Received unknown topic or partition error in fetch for partition {}", tp);
                 this.metadata.requestUpdate();
-            } else if (error == Errors.OFFSET_OUT_OF_RANGE) {
+            } else if (error == Errors.OFFSET_OUT_OF_RANGE) { // 5
+                /**
+                 * 针对 OFFSET_OUT_OF_RANGE 偏移量超过范围异常的处理逻辑，其实现关键点如下：
+                 *1。如果此次拉取的开始偏移量与消费者本地缓存的偏移量不一致，则丢弃，说明该消息已过期，打印错误日志。
+                 *2。如果此次拉取的开始偏移量与消费者本地缓存的偏移量一致，说明此时的偏移量非法，如果有配置重置偏移量策略，则使用重置偏移量，否则抛出OffsetOutOfRangeException 错误。
+                 */
                 Optional<Integer> clearedReplicaId = subscriptions.clearPreferredReadReplica(tp);
                 if (!clearedReplicaId.isPresent()) {
                     // If there's no preferred replica to clear, we're fetching from the leader so handle this error normally
@@ -1321,7 +1397,8 @@ public class Fetcher<K, V> implements Closeable {
                     log.debug("Unset the preferred read replica {} for partition {} since we got {} when fetching {}",
                             clearedReplicaId.get(), tp, error, fetchOffset);
                 }
-            } else if (error == Errors.TOPIC_AUTHORIZATION_FAILED) {
+            } else if (error == Errors.TOPIC_AUTHORIZATION_FAILED) { // 6
+                // 如果是 TOPIC_AUTHORIZATION_FAILED 没有权限(ACL)则抛出异常
                 //we log the actual partition and not just the topic to help with ACL propagation issues in large clusters
                 log.warn("Not authorized to read from partition {}.", tp);
                 throw new TopicAuthorizationException(Collections.singleton(tp.topic()));
@@ -1342,7 +1419,9 @@ public class Fetcher<K, V> implements Closeable {
                         + fetchOffset
                         + " from topic-partition " + tp);
             }
-        } finally {
+        } finally { // 7
+            // 如果本次拉取的结果不是NONE(成功)，并且是可恢复的，
+            // 将该队列的订阅关系移动到消费者缓存列表的末尾。如果成功，则返回拉取到的分区数据，其封装对象为 PartitionRecords。
             if (completedFetch == null)
                 nextCompletedFetch.metricAggregator.record(tp, 0, 0);
 
@@ -1452,12 +1531,15 @@ public class Fetcher<K, V> implements Closeable {
     }
 
     private class CompletedFetch {
+        // 分区信息，返回结果都是以分区为纬度。
         private final TopicPartition partition;
         private final Iterator<? extends RecordBatch> batches;
         private final Set<Long> abortedProducerIds;
         private final PriorityQueue<FetchResponse.AbortedTransaction> abortedTransactions;
+        // 返回的分区数据。
         private final FetchResponse.PartitionData<Records> partitionData;
         private final FetchResponseMetricAggregator metricAggregator;
+        //broker 端的版本号。
         private final short responseVersion;
 
         private int recordsRead;

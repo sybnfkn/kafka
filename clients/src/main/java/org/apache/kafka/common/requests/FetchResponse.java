@@ -122,6 +122,7 @@ public class FetchResponse<T extends BaseRecords> extends AbstractResponse {
         // Derived fields
         private final Optional<Integer> preferredReplica;
         private final List<AbortedTransaction> abortedTransactions;
+        // 分区拉取的相应结果，Errors.NONE 表示请求成功。
         private final Errors error;
 
         private PartitionData(FetchResponseData.FetchablePartitionResponse partitionResponse) {
