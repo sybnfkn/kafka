@@ -83,6 +83,7 @@ public class SubscriptionState {
     private Pattern subscribedPattern;
 
     /* the list of topics the user has requested */
+    // 订阅的主题
     private Set<String> subscription;
 
     /* The list of topics the group has subscribed to. This may include some topics which are not part

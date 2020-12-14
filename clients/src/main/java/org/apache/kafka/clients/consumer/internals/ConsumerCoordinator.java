@@ -446,6 +446,7 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
             if (subscriptions.hasPatternSubscription())
                 updatePatternSubscription(cluster);
 
+            // 更新当前快照，该快照将用于检查订阅需要重新平衡的更改
             // Update the current snapshot, which will be used to check for subscription
             // changes that would require a rebalance (e.g. new partitions).
             metadataSnapshot = new MetadataSnapshot(subscriptions, cluster, version);
@@ -465,6 +466,7 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
      * @return true iff the operation succeeded
      */
     public boolean poll(Timer timer, boolean waitForJoinGroup) {
+
         maybeUpdateSubscriptionMetadata();
 
         // 执行已完成的 offset (消费进度)提交请求的回调函数
@@ -508,6 +510,7 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
                         this.metadata.requestUpdate();
                     }
 
+                    // 确保元数据是新的，如果需要更新元数据，他将一直阻塞直到完成
                     if (!client.ensureFreshMetadata(timer)) {
                         return false;
                     }
