@@ -1334,7 +1334,7 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
         }
 
         // send any new fetches (won't resend pending fetches)
-        // 组装发送请求，并将存储在待发送请求列表中
+        // 组装发送请求，并将存储在待发送请求列表中。 注册回调函数
         fetcher.sendFetches();
 
         // We do not want to be stuck blocking in poll if we are missing some positions
@@ -1353,11 +1353,12 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
         log.trace("Polling for fetches with timeout {}", pollTimeout);
 
         Timer pollTimer = time.timer(pollTimeout);
+        // 通过调用NetworkClient 的 poll 方法发起消息拉取操作（触发网络读写）
         client.poll(pollTimer, () -> {
             // since a fetch might be completed by the background thread, we need this poll condition
             // to ensure that we do not block unnecessarily in poll()
             return !fetcher.hasAvailableFetches();
-        }); // 通过调用NetworkClient 的 poll 方法发起消息拉取操作（触发网络读写）
+        });
 
         // 更新本次拉取的时间
         timer.update(pollTimer.currentTimeMs());

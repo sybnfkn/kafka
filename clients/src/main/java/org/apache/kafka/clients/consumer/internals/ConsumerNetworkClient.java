@@ -133,6 +133,7 @@ public class ConsumerNetworkClient implements Closeable {
         RequestFutureCompletionHandler completionHandler = new RequestFutureCompletionHandler();
         ClientRequest clientRequest = client.newClientRequest(node.idString(), requestBuilder, now, true,
             requestTimeoutMs, null, null, completionHandler);
+        // 创建clientrequest对象，并保存到unset集合中
         unsent.put(node, clientRequest);
 
         // wakeup the client in case it is blocking in poll so that we can send the queued request
@@ -260,7 +261,8 @@ public class ConsumerNetworkClient implements Closeable {
 
             /**
              * 对每个node节点，循环遍历对应的clientrequest列表，每次循环都调用networkclient.ready()方法检测消费者和此节点之间的连接
-             * 以及发送请求的条件。如果符合发送条件，调用send方法将请求放入InFlightRequests队列中等待响应。也放入KafkaChannel的send字段中等待发送，并将
+             * 以及发送请求的条件。
+             * *** 如果符合发送条件，调用send方法将请求放入InFlightRequests队列中等待响应。也放入KafkaChannel的send字段中等待发送，并将
              * 消息从列表中删除
              */
             long pollDelayMs = trySend(timer.currentTimeMs());
@@ -274,7 +276,8 @@ public class ConsumerNetworkClient implements Closeable {
                 long pollTimeout = Math.min(timer.remainingMs(), pollDelayMs);
                 if (client.inFlightRequestCount() == 0)
                     pollTimeout = Math.min(pollTimeout, retryBackoffMs);
-                // 将kafkachannel.send字段指定消息发送出去。除此之外，poll方法可能会更新Metadata使用一系列handle方法处理请求响应，连接断开，超时等情况，比ing回调每个请求
+                // 将kafkachannel.send字段指定消息发送出去。
+                // 除此之外，poll方法可能会更新Metadata使用一系列handle方法处理请求响应，连接断开，超时等情况，比ing回调每个请求
                 // 回调函数
                 client.poll(pollTimeout, timer.currentTimeMs());
             } else {

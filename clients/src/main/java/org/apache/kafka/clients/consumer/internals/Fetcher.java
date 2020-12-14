@@ -159,7 +159,7 @@ public class Fetcher<K, V> implements Closeable {
     private final FetchManagerMetrics sensors;
     // 订阅信息状态。
     private final SubscriptionState subscriptions;
-    // 已完成的 Fetch 的请求结果，待消费端从中取出数据。
+    // 已完成的 Fetch 的请求结果，待消费端从中取出数据（里面封装的消息，需要解出来）
     private final ConcurrentLinkedQueue<CompletedFetch> completedFetches;
     private final BufferSupplier decompressionBufferSupplier = BufferSupplier.create();
     private final Deserializer<K> keyDeserializer;
@@ -268,6 +268,7 @@ public class Fetcher<K, V> implements Closeable {
         Map<Node, FetchSessionHandler.FetchRequestData> fetchRequestMap = prepareFetchRequests(); // 1
         // 遍历上面的待发请求，进一步组装请求。下面就是分节点发送拉取请求
         for (Map.Entry<Node, FetchSessionHandler.FetchRequestData> entry : fetchRequestMap.entrySet()) { // 2
+            // 一个节点一个节点拉取
             final Node fetchTarget = entry.getKey();
             final FetchSessionHandler.FetchRequestData data = entry.getValue();
             final FetchRequest.Builder request = FetchRequest.Builder
@@ -622,12 +623,10 @@ public class Fetcher<K, V> implements Closeable {
      * @throws TopicAuthorizationException If there is TopicAuthorization error in fetchResponse.
      */
     public Map<TopicPartition, List<ConsumerRecord<K, V>>> fetchedRecords() {
-        /**
-         * Map>> fetched 按分区存放已拉取的消息，返回给客户端进行处理。
-         * recordsRemaining：剩余可拉取的消息条数。
-         */
+        // 按分区存放已拉取的消息，返回给客户端进行处理。
         Map<TopicPartition, List<ConsumerRecord<K, V>>> fetched = new HashMap<>(); // 1
         Queue<CompletedFetch> pausedCompletedFetches = new ArrayDeque<>();
+        // 剩余可拉取的消息条数。
         int recordsRemaining = maxPollRecords;
 
         try {
@@ -651,7 +650,7 @@ public class Fetcher<K, V> implements Closeable {
                     CompletedFetch records = completedFetches.peek();
                     if (records == null) break;
 
-                    if (records.notInitialized()) {
+                    if (records.notInitialized()) { // 是否执行过initializeCompletedFetch方法
                         try {
                             nextInLineFetch = initializeCompletedFetch(records);
                         } catch (Exception e) {
@@ -669,6 +668,7 @@ public class Fetcher<K, V> implements Closeable {
                     } else {
                         nextInLineFetch = records;
                     }
+                    // 头节点移除掉
                     completedFetches.poll();
                 } else if (subscriptions.isPaused(nextInLineFetch.partition)) {
                     // when the partition is paused we add the records back to the completedFetches queue instead of draining
