@@ -240,6 +240,7 @@ public abstract class AbstractCoordinator implements Closeable {
                 findCoordinatorException = null;
                 throw fatalException;
             }
+            // 寻找协调者节点
             final RequestFuture<Void> future = lookupCoordinator();
             client.poll(future, timer);
 
@@ -268,11 +269,13 @@ public abstract class AbstractCoordinator implements Closeable {
     protected synchronized RequestFuture<Void> lookupCoordinator() {
         if (findCoordinatorFuture == null) {
             // find a node to ask about the coordinator
+            // 寻找最小负载的节点
             Node node = this.client.leastLoadedNode();
             if (node == null) {
                 log.debug("No broker available to send FindCoordinator request");
                 return RequestFuture.noBrokersAvailable();
             } else {
+                // 发送寻找协调者的请求
                 findCoordinatorFuture = sendFindCoordinatorRequest(node);
                 // remember the exception even after the future is cleared so that
                 // it can still be thrown by the ensureCoordinatorReady caller
@@ -475,6 +478,7 @@ public abstract class AbstractCoordinator implements Closeable {
                 else if (!future.isRetriable())
                     throw exception;
 
+                // 重置，重新加入
                 resetStateAndRejoin();
                 timer.sleep(rebalanceConfig.retryBackoffMs);
             }
@@ -496,6 +500,7 @@ public abstract class AbstractCoordinator implements Closeable {
             // in this case we would not update the start time.
             if (lastRebalanceStartMs == -1L)
                 lastRebalanceStartMs = time.milliseconds();
+            // 发送joinGroup请求
             joinFuture = sendJoinGroupRequest();
             joinFuture.addListener(new RequestFutureListener<ByteBuffer>() {
                 @Override
@@ -532,9 +537,11 @@ public abstract class AbstractCoordinator implements Closeable {
 
         // send a join group request to the coordinator
         log.info("(Re-)joining group");
+        // 加入组请求，携带JoinGroup
         JoinGroupRequest.Builder requestBuilder = new JoinGroupRequest.Builder(
                 new JoinGroupRequestData()
                         .setGroupId(rebalanceConfig.groupId)
+                        // 发送joingroup时候，携带这个时间
                         .setSessionTimeoutMs(this.rebalanceConfig.sessionTimeoutMs)
                         .setMemberId(this.generation.memberId)
                         .setGroupInstanceId(this.rebalanceConfig.groupInstanceId.orElse(null))
@@ -549,6 +556,7 @@ public abstract class AbstractCoordinator implements Closeable {
         // maximum time that it may block on the coordinator. We add an extra 5 seconds for small delays.
         int joinGroupTimeoutMs = Math.max(client.defaultRequestTimeoutMs(),
             rebalanceConfig.rebalanceTimeoutMs + JOIN_GROUP_TIMEOUT_LAPSE);
+        // coordinator 发送给协调者
         return client.send(coordinator, requestBuilder, joinGroupTimeoutMs)
                 .compose(new JoinGroupResponseHandler(generation));
     }
@@ -589,9 +597,12 @@ public abstract class AbstractCoordinator implements Closeable {
 
                             log.info("Successfully joined group with generation {}", AbstractCoordinator.this.generation);
 
+                            // 判断是普通节点还是leader 节点
                             if (joinResponse.isLeader()) {
+                                // leader节点
                                 onJoinLeader(joinResponse).chain(future);
                             } else {
+                                // 普通节点
                                 onJoinFollower().chain(future);
                             }
                         }
@@ -662,6 +673,7 @@ public abstract class AbstractCoordinator implements Closeable {
 
     private RequestFuture<ByteBuffer> onJoinFollower() {
         // send follower's sync group with an empty assignment
+        // 发送一个空的分配结果
         SyncGroupRequest.Builder requestBuilder =
                 new SyncGroupRequest.Builder(
                         new SyncGroupRequestData()
@@ -680,6 +692,7 @@ public abstract class AbstractCoordinator implements Closeable {
     private RequestFuture<ByteBuffer> onJoinLeader(JoinGroupResponse joinResponse) {
         try {
             // perform the leader synchronization and send back the assignment for the group
+            // 执行分配任务
             Map<String, ByteBuffer> groupAssignment = performAssignment(joinResponse.data().leader(), joinResponse.data().protocolName(),
                     joinResponse.data().members());
 
@@ -700,6 +713,7 @@ public abstract class AbstractCoordinator implements Closeable {
                                     .setProtocolName(generation.protocolName)
                                     .setGroupInstanceId(this.rebalanceConfig.groupInstanceId.orElse(null))
                                     .setGenerationId(generation.generationId)
+                                    // 分配结果
                                     .setAssignments(groupAssignmentList)
                     );
             log.debug("Sending leader SyncGroup to coordinator {} at generation {}: {}", this.coordinator, this.generation, requestBuilder);
