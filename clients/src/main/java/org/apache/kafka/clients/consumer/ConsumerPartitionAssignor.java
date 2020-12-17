@@ -92,6 +92,9 @@ public interface ConsumerPartitionAssignor {
      */
     String name();
 
+    /**
+     * 每个member订阅信息
+     */
     final class Subscription {
         private final List<String> topics;
         private final ByteBuffer userData;
@@ -134,6 +137,9 @@ public interface ConsumerPartitionAssignor {
         }
     }
 
+    /**
+     * 集群元数据
+     */
     final class Assignment {
         private List<TopicPartition> partitions;
         private ByteBuffer userData;

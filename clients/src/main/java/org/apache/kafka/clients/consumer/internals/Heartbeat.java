@@ -27,7 +27,9 @@ import org.slf4j.Logger;
  * A helper class for managing the heartbeat to the coordinator
  */
 public final class Heartbeat {
+    // 两次发送心跳的间隔
     private final int maxPollIntervalMs;
+    // 重平衡的配置类
     private final GroupRebalanceConfig rebalanceConfig;
     private final Time time;
     private final Timer heartbeatTimer;
@@ -35,7 +37,9 @@ public final class Heartbeat {
     private final Timer pollTimer;
     private final Logger log;
 
+    // 最近发送心跳的时间
     private volatile long lastHeartbeatSend = 0L;
+    // 没有正在发送的心跳
     private volatile boolean heartbeatInFlight = false;
 
     public Heartbeat(GroupRebalanceConfig config,

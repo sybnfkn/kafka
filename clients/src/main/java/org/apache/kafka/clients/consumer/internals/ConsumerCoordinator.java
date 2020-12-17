@@ -87,11 +87,14 @@ import java.util.stream.Collectors;
 public final class ConsumerCoordinator extends AbstractCoordinator {
     private final GroupRebalanceConfig rebalanceConfig;
     private final Logger log;
+    // 分配策略列表
     private final List<ConsumerPartitionAssignor> assignors;
     private final ConsumerMetadata metadata;
     private final ConsumerCoordinatorMetrics sensors;
+    //
     private final SubscriptionState subscriptions;
     private final OffsetCommitCallback defaultOffsetCommitCallback;
+    // 是否开启自动提交
     private final boolean autoCommitEnabled;
     private final int autoCommitIntervalMs;
     private final ConsumerInterceptors<?, ?> interceptors;
@@ -103,8 +106,17 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
 
     private boolean isLeader = false;
     private Set<String> joinedSubscription;
+    // 存储meta的快照信息
+    // 主要检测topic是否发生分区数量的变化，metadata有一个监听器，如果meta发生更新时
+    // 表示消费者订阅的topic发生数量变化，设置SubscriptionState的 需要重新分配
     private MetadataSnapshot metadataSnapshot;
+
+    // 检测partition分配过程中有没有发生分区数量变化，
+    // leader消费者开始分区分配操作前，使用此字段记录metadata快照
+    // 收到SyncGroupResponse后，会比较此字段记录的快照和当前Metadata是否发生变化
+    // 如果发生变化，重新进行分区
     private MetadataSnapshot assignmentSnapshot;
+
     private Timer nextAutoCommitTimer;
     private AtomicBoolean asyncCommitFenced;
     private ConsumerGroupMetadata groupMetadata;
@@ -352,6 +364,7 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
         if (!isLeader)
             assignmentSnapshot = null;
 
+        // 寻找分配策略
         ConsumerPartitionAssignor assignor = lookupAssignor(assignmentStrategy);
         if (assignor == null)
             throw new IllegalStateException("Coordinator selected invalid assignment protocol: " + assignmentStrategy);

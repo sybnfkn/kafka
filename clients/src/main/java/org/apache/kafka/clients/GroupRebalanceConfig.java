@@ -37,11 +37,15 @@ public class GroupRebalanceConfig {
         }
     }
 
+    //  session的超时时间
     public final int sessionTimeoutMs;
+    // 重平衡的超时时间
     public final int rebalanceTimeoutMs;
+    // 心跳的间隔时间
     public final int heartbeatIntervalMs;
     public final String groupId;
     public final Optional<String> groupInstanceId;
+    // 重试的间隔时间，防止打爆网络
     public final long retryBackoffMs;
     public final boolean leaveGroupOnClose;
 

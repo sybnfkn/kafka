@@ -124,20 +124,27 @@ public abstract class AbstractCoordinator implements Closeable {
     }
 
     private final Logger log;
+    // 心跳任务的辅助类
     private final Heartbeat heartbeat;
     private final GroupCoordinatorMetrics sensors;
     private final GroupRebalanceConfig rebalanceConfig;
 
     protected final Time time;
+    // 负责执行网络
     protected final ConsumerNetworkClient client;
 
     private Node coordinator = null;
+    // 是否重新发送JoinGroupRequest
     private boolean rejoinNeeded = true;
+    // 标记是否需要发送JoinGroupRequest请求前的准备工作
     private boolean needsJoinPrepare = true;
+    // 心跳线程
     private HeartbeatThread heartbeatThread = null;
     private RequestFuture<ByteBuffer> joinFuture = null;
     private RequestFuture<Void> findCoordinatorFuture = null;
     volatile private RuntimeException findCoordinatorException = null;
+    // 服务端GroupCoordinator返回的年代信息，用来区分两次rebalance操作。
+    // 由于网络延迟问题，执行rebalance操作时候，可能收到上次rebalance过程中的请求，避免这种敢逃
     private Generation generation = Generation.NO_GENERATION;
     private long lastRebalanceStartMs = -1L;
     private long lastRebalanceEndMs = -1L;
@@ -229,6 +236,7 @@ public abstract class AbstractCoordinator implements Closeable {
      *
      * @param timer Timer bounding how long this method can block
      * @return true If coordinator discovery and initial connection succeeded, false otherwise
+     * 确保coordinator准备好了
      */
     protected synchronized boolean ensureCoordinatorReady(final Timer timer) {
         if (!coordinatorUnknown())
@@ -240,7 +248,8 @@ public abstract class AbstractCoordinator implements Closeable {
                 findCoordinatorException = null;
                 throw fatalException;
             }
-            // 寻找协调者节点
+            // 寻找协调者节点，发送寻找coordinator请求，FindCoordinatorResponseHandler就是处理响应结果的
+            // 这里会设置coordinator 字段，然后循环就会退出
             final RequestFuture<Void> future = lookupCoordinator();
             client.poll(future, timer);
 
@@ -362,11 +371,13 @@ public abstract class AbstractCoordinator implements Closeable {
     boolean ensureActiveGroup(final Timer timer) {
         // always ensure that the coordinator is ready because we may have been disconnected
         // when sending heartbeats and does not necessarily require us to rejoin the group.
+        // 确定Coordinator启动
         if (!ensureCoordinatorReady(timer)) {
             return false;
         }
-
+        // 开启心跳
         startHeartbeatThreadIfNeeded();
+        // 查到后可能进入JoinGroup阶段
         return joinGroupIfNeeded(timer);
     }
 
@@ -410,8 +421,8 @@ public abstract class AbstractCoordinator implements Closeable {
      * @return true iff the operation succeeded
      */
     boolean joinGroupIfNeeded(final Timer timer) {
-        while (rejoinNeededOrPending()) {
-            if (!ensureCoordinatorReady(timer)) {
+        while (rejoinNeededOrPending()) { // 判断是否join，里面根据很多条件判断
+            if (!ensureCoordinatorReady(timer)) { // 确保coordinator准备好了
                 return false;
             }
 
@@ -424,11 +435,11 @@ public abstract class AbstractCoordinator implements Closeable {
                 // need to set the flag before calling onJoinPrepare since the user callback may throw
                 // exception, in which case upon retry we should not retry onJoinPrepare either.
                 needsJoinPrepare = false;
-                onJoinPrepare(generation.generationId, generation.memberId);
+                onJoinPrepare(generation.generationId, generation.memberId); // 加入前准备
             }
 
             final RequestFuture<ByteBuffer> future = initiateJoinGroup();
-            client.poll(future, timer);
+            client.poll(future, timer); // 阻塞等待结果
             if (!future.isDone()) {
                 // we ran out of time
                 return false;
@@ -588,9 +599,11 @@ public abstract class AbstractCoordinator implements Closeable {
 
                             // we only need to enable heartbeat thread whenever we transit to
                             // COMPLETING_REBALANCE state since we always transit from this state to STABLE
+                            // 我们只需要在过渡到COMPLETING_REBALANCE状态时就启用心跳线程，因为我们总是从该状态过渡到STABLE
                             if (heartbeatThread != null)
                                 heartbeatThread.enable();
 
+                            //
                             AbstractCoordinator.this.generation = new Generation(
                                 joinResponse.data().generationId(),
                                 joinResponse.data().memberId(), joinResponse.data().protocolName());
@@ -763,6 +776,7 @@ public abstract class AbstractCoordinator implements Closeable {
                             } else {
                                 log.info("Successfully synced group in generation {}", generation);
                                 state = MemberState.STABLE;
+                                // 正常接受到，会置为false
                                 rejoinNeeded = false;
                                 // record rebalance latency
                                 lastRebalanceEndMs = time.milliseconds();
@@ -887,6 +901,7 @@ public abstract class AbstractCoordinator implements Closeable {
      * @return the current coordinator or null if it is unknown
      */
     protected synchronized Node checkAndGetCoordinator() {
+        // 检测和GroupCorrdinator之间网络连接是否正常
         if (coordinator != null && client.isUnavailable(coordinator)) {
             markCoordinatorUnknown(true);
             return null;
@@ -1095,28 +1110,28 @@ public abstract class AbstractCoordinator implements Closeable {
             sensors.heartbeatSensor.record(response.requestLatencyMs());
             Errors error = heartbeatResponse.error();
 
-            if (error == Errors.NONE) {
+            if (error == Errors.NONE) { // 心跳正常
                 log.debug("Received successful Heartbeat response");
                 future.complete(null);
             } else if (error == Errors.COORDINATOR_NOT_AVAILABLE
-                    || error == Errors.NOT_COORDINATOR) {
+                    || error == Errors.NOT_COORDINATOR) { // 找不到服务端对应的GroupCoordinator 清空unsent集合对应的请求，重新查找GroupCoordinator
                 log.info("Attempt to heartbeat failed since coordinator {} is either not started or not valid",
                         coordinator());
                 markCoordinatorUnknown();
                 future.raise(error);
-            } else if (error == Errors.REBALANCE_IN_PROGRESS) {
+            } else if (error == Errors.REBALANCE_IN_PROGRESS) { //
                 // since we may be sending the request during rebalance, we should check
                 // this case and ignore the REBALANCE_IN_PROGRESS error
                 if (state == MemberState.STABLE) {
                     log.info("Attempt to heartbeat failed since group is rebalancing");
-                    requestRejoin();
+                    requestRejoin(); // 重新发送JoinGroupRequest
                     future.raise(error);
                 } else {
                     log.debug("Ignoring heartbeat response with error {} during {} state", error, state);
                     future.complete(null);
                 }
-            } else if (error == Errors.ILLEGAL_GENERATION ||
-                       error == Errors.UNKNOWN_MEMBER_ID ||
+            } else if (error == Errors.ILLEGAL_GENERATION || // 重新JoinGroupRequest
+                       error == Errors.UNKNOWN_MEMBER_ID || // 清空member，重新JoinGroupRequest
                        error == Errors.FENCED_INSTANCE_ID) {
                 if (generationUnchanged()) {
                     log.info("Attempt to heartbeat with {} and group instance id {} failed due to {}, resetting generation",
@@ -1363,6 +1378,7 @@ public abstract class AbstractCoordinator implements Closeable {
                         } else if (heartbeat.sessionTimeoutExpired(now)) {
                             // the session timeout has expired without seeing a successful heartbeat, so we should
                             // probably make sure the coordinator is still healthy.
+                            // 会话超时已过期，但没有看到成功的心跳，因此我们应该//确保协调器仍然健康。
                             markCoordinatorUnknown();
                         } else if (heartbeat.pollTimeoutExpired(now)) {
                             // the poll timeout has expired, which means that the foreground thread has stalled
@@ -1373,7 +1389,7 @@ public abstract class AbstractCoordinator implements Closeable {
                                                     "You can address this either by increasing max.poll.interval.ms or by reducing " +
                                                     "the maximum size of batches returned in poll() with max.poll.records.";
                             maybeLeaveGroup(leaveReason);
-                        } else if (!heartbeat.shouldHeartbeat(now)) {
+                        } else if (!heartbeat.shouldHeartbeat(now)) { // 没有到发送心跳的时间
                             // poll again after waiting for the retry backoff in case the heartbeat failed or the
                             // coordinator disconnected
                             AbstractCoordinator.this.wait(rebalanceConfig.retryBackoffMs);
