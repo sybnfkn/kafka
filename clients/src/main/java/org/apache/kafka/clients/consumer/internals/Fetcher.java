@@ -341,6 +341,8 @@ public class Fetcher<K, V> implements Closeable {
                                     Iterator<? extends RecordBatch> batches = partitionData.records().batches().iterator();
                                     short responseVersion = resp.requestHeader().apiVersion();
 
+                                    // 消息拉取请求收到返回结果后会将返回结果放入到completedFetches 中（代码@6），
+                                    // 这就和上文消息拉取时 Fetcher 的 fetchedRecords 方法形成闭环。
                                     completedFetches.add(new CompletedFetch(partition, partitionData,
                                             metricAggregator, batches, fetchOffset, responseVersion)); // 6
                                 }

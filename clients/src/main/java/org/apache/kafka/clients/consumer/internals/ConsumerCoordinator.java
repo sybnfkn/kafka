@@ -277,6 +277,7 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
                 newSubscription.addAll(addedTopics);
                 newJoinedSubscription.addAll(addedTopics);
 
+                // 订阅分区变化，需要拉取元数据
                 if (this.subscriptions.subscribeFromPattern(newSubscription))
                     metadata.requestUpdateForNewTopics();
                 this.joinedSubscription = newJoinedSubscription;
@@ -381,6 +382,7 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
                 "it is possible that the leader's assign function is buggy and did not return any assignment for this member, " +
                 "or because static member is configured and the protocol is buggy hence did not get the assignment for this member");
 
+        // 反序列化出分配的结果
         Assignment assignment = ConsumerProtocol.deserializeAssignment(assignmentBuffer);
 
         Set<TopicPartition> assignedPartitions = new HashSet<>(assignment.partitions());
@@ -437,6 +439,7 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
         if (autoCommitEnabled)
             this.nextAutoCommitTimer.updateAndReset(autoCommitIntervalMs);
 
+        // 分配结果保存到 SubscriptionState 的 PartitionStates<TopicPartitionState> assignment中
         subscriptions.assignFromSubscribed(assignedPartitions);
 
         // Add partitions that were not previously owned but are now assigned
@@ -496,6 +499,7 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
             // 更新发送心跳相关的时间，例如heartbeatTimer、sessionTimer、pollTimer 分别代表发送最新发送心跳的时间、会话最新活跃时间、最新拉取消息。
             pollHeartbeat(timer.currentTimeMs());
             // 如果不存在协调器或协调器已断开连接，则返回 false，结束本次拉取。如果协调器就绪，则继续往下走
+            // 1。重平衡的协调器需要找到
             if (coordinatorUnknown() && !ensureCoordinatorReady(timer)) {
                 return false;
             }
@@ -507,7 +511,7 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
              *3。如果队列是自动负载，订阅关系发生了变化，则需要重平衡。
              * 4。如果需要重重平衡，则同步更新元数据，此过程会阻塞。详细的重平衡将单独重点介绍，这里暂时不深入展开。
              */
-            if (rejoinNeededOrPending()) {
+            if (rejoinNeededOrPending()) { // 2。决定是否要进行重平衡
                 // due to a race condition between the initial metadata fetch and the initial rebalance,
                 // we need to ensure that the metadata is fresh before joining initially. This ensures
                 // that we have matched the pattern against the cluster's topics at least once before joining.
@@ -532,6 +536,7 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
                 }
 
                 // if not wait for join group, we would just use a timer of 0
+                // 4。启动Heartbeat线程，实时检测是不是重平衡
                 if (!ensureActiveGroup(waitForJoinGroup ? timer : time.timer(0L))) {
                     // since we may use a different timer in the callee, we'd still need
                     // to update the original timer's current time after the call
@@ -580,6 +585,7 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
         // the leader will begin watching for changes to any of the topics the group is interested in,
         // which ensures that all metadata changes will eventually be seen
         if (this.subscriptions.groupSubscribe(topics))
+            // 获取新的topic的元数据信息
             metadata.requestUpdateForNewTopics();
 
         // update metadata (if needed) and keep track of the metadata used for assignment so that
@@ -599,15 +605,19 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
         if (assignor == null)
             throw new IllegalStateException("Coordinator selected invalid assignment protocol: " + assignmentStrategy);
 
+        // 所有订阅的topic
         Set<String> allSubscribedTopics = new HashSet<>();
+        //每个消费者的订阅信息
         Map<String, Subscription> subscriptions = new HashMap<>();
 
         // collect all the owned partitions
         Map<String, List<TopicPartition>> ownedPartitions = new HashMap<>();
 
         for (JoinGroupResponseData.JoinGroupResponseMember memberSubscription : allSubscriptions) {
+            // 反序列化
             Subscription subscription = ConsumerProtocol.deserializeSubscription(ByteBuffer.wrap(memberSubscription.metadata()));
             subscription.setGroupInstanceId(Optional.ofNullable(memberSubscription.groupInstanceId()));
+            // 每个成员的订阅信息 memberId每个成员id
             subscriptions.put(memberSubscription.memberId(), subscription);
             allSubscribedTopics.addAll(subscription.topics());
             ownedPartitions.put(memberSubscription.memberId(), subscription.ownedPartitions());
@@ -615,13 +625,14 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
 
         // the leader will begin watching for changes to any of the topics the group is interested in,
         // which ensures that all metadata changes will eventually be seen
+        // 更新订阅topic信息
         updateGroupSubscription(allSubscribedTopics);
 
         isLeader = true;
 
         log.debug("Performing assignment using strategy {} with subscriptions {}", assignor.name(), subscriptions);
 
-        // 进行分配
+        // 进行分区分配
         Map<String, Assignment> assignments = assignor.assign(metadata.fetch(), new GroupSubscription(subscriptions)).groupAssignment();
 
         if (protocol == RebalanceProtocol.COOPERATIVE) {
@@ -709,6 +720,7 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
     protected void onJoinPrepare(int generation, String memberId) {
         log.debug("Executing onJoinPrepare with generation {} and memberId {}", generation, memberId);
         // commit offsets prior to rebalance if auto-commit enabled
+        // 如果是自动提交，进行一次同步提交
         maybeAutoCommitOffsetsSync(time.timer(rebalanceConfig.rebalanceTimeoutMs));
 
         // the generation / member-id can possibly be reset by the heartbeat thread
@@ -760,6 +772,7 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
         }
 
         isLeader = false;
+        // 重置
         subscriptions.resetGroupSubscription();
 
         if (exception != null) {
@@ -804,6 +817,8 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
 
         // we need to rejoin if we performed the assignment and metadata has changed;
         // also for those owned-but-no-longer-existed partitions we should drop them as lost
+        // 如果执行分配并且元数据已更改，我们需要重新加入；
+        // 对于那些拥有但不再存在的分区，我们也应该将其丢弃
         if (assignmentSnapshot != null && !assignmentSnapshot.matches(metadataSnapshot)) {
             log.info("Requesting to re-join the group and trigger rebalance since the assignment metadata has changed from {} to {}",
                     assignmentSnapshot, metadataSnapshot);
@@ -813,6 +828,7 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
         }
 
         // we need to join if our subscription has changed since the last join
+        // 如果自上次join以来我们的订阅已更改，我们需要加入
         if (joinedSubscription != null && !joinedSubscription.equals(subscriptions.subscription())) {
             log.info("Requesting to re-join the group and trigger rebalance since the subscription has changed from {} to {}",
                 joinedSubscription, subscriptions.subscription());
@@ -1090,7 +1106,7 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
     }
 
     private void maybeAutoCommitOffsetsSync(Timer timer) {
-        if (autoCommitEnabled) {
+        if (autoCommitEnabled) { // 是否自动提交
             Map<TopicPartition, OffsetAndMetadata> allConsumedOffsets = subscriptions.allConsumed();
             try {
                 log.debug("Sending synchronous auto-commit of offsets {}", allConsumedOffsets);

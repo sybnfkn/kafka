@@ -314,6 +314,9 @@ public abstract class AbstractCoordinator implements Closeable {
      */
     protected synchronized boolean rejoinNeededOrPending() {
         // if there's a pending joinFuture, we should try to complete handling it.
+        // 1。SyncGroupResponseHandler 收到SyncGroup响应后，会将rejoinNeeded置为false
+        // 2。心跳检测收到 REBALANCE_IN_PROGRESS 会将其置为true表明需要
+        // 3。子类中还有很多判断条件
         return rejoinNeeded || joinFuture != null;
     }
 
@@ -435,9 +438,15 @@ public abstract class AbstractCoordinator implements Closeable {
                 // need to set the flag before calling onJoinPrepare since the user callback may throw
                 // exception, in which case upon retry we should not retry onJoinPrepare either.
                 needsJoinPrepare = false;
+                /**
+                 * 1.如果开启了自动提交offset进行同步提交offset，此步骤会阻塞线程
+                 * 2。调用注册在SubscriptionState的ConsumerRebalanceListener回调方法
+                 * 3。即哪个SubscriptionState的needsPartitionAssignment字段设置为true并置空groupSubscription集合
+                 */
                 onJoinPrepare(generation.generationId, generation.memberId); // 加入前准备
             }
 
+            // 感觉比较复杂，他会一直等待SyncGroupResponse完成后 （好好看看啊）
             final RequestFuture<ByteBuffer> future = initiateJoinGroup();
             client.poll(future, timer); // 阻塞等待结果
             if (!future.isDone()) {
@@ -462,6 +471,7 @@ public abstract class AbstractCoordinator implements Closeable {
                     // Duplicate the buffer in case `onJoinComplete` does not complete and needs to be retried.
                     ByteBuffer memberAssignment = future.value().duplicate();
 
+                    // 最终SyncGroupResponse结果，会在这里处理
                     onJoinComplete(generationSnapshot.generationId, generationSnapshot.memberId, generationSnapshot.protocolName, memberAssignment);
 
                     // Generally speaking we should always resetJoinGroupFuture once the future is done, but here
@@ -568,6 +578,7 @@ public abstract class AbstractCoordinator implements Closeable {
         int joinGroupTimeoutMs = Math.max(client.defaultRequestTimeoutMs(),
             rebalanceConfig.rebalanceTimeoutMs + JOIN_GROUP_TIMEOUT_LAPSE);
         // coordinator 发送给协调者
+        // JoinGroupResponseHandler 是其回调函数
         return client.send(coordinator, requestBuilder, joinGroupTimeoutMs)
                 .compose(new JoinGroupResponseHandler(generation));
     }
@@ -600,6 +611,7 @@ public abstract class AbstractCoordinator implements Closeable {
                             // we only need to enable heartbeat thread whenever we transit to
                             // COMPLETING_REBALANCE state since we always transit from this state to STABLE
                             // 我们只需要在过渡到COMPLETING_REBALANCE状态时就启用心跳线程，因为我们总是从该状态过渡到STABLE
+                            // 收到joinGroupResponse响应后才会发送心跳
                             if (heartbeatThread != null)
                                 heartbeatThread.enable();
 
@@ -717,6 +729,7 @@ public abstract class AbstractCoordinator implements Closeable {
                 );
             }
 
+            // 发送SyncGroupRequest
             SyncGroupRequest.Builder requestBuilder =
                     new SyncGroupRequest.Builder(
                             new SyncGroupRequestData()
@@ -783,6 +796,7 @@ public abstract class AbstractCoordinator implements Closeable {
                                 sensors.successfulRebalanceSensor.record(lastRebalanceEndMs - lastRebalanceStartMs);
                                 lastRebalanceStartMs = -1L;
 
+                                // 传播分区结果
                                 future.complete(ByteBuffer.wrap(syncResponse.data.assignment()));
                             }
                         } else {
@@ -862,6 +876,7 @@ public abstract class AbstractCoordinator implements Closeable {
                     // for the coordinator in the underlying network client layer
                     int coordinatorConnectionId = Integer.MAX_VALUE - findCoordinatorResponse.data().nodeId();
 
+                    // 设置coordinator
                     AbstractCoordinator.this.coordinator = new Node(
                             coordinatorConnectionId,
                             findCoordinatorResponse.data().host(),
@@ -1119,7 +1134,7 @@ public abstract class AbstractCoordinator implements Closeable {
                         coordinator());
                 markCoordinatorUnknown();
                 future.raise(error);
-            } else if (error == Errors.REBALANCE_IN_PROGRESS) { //
+            } else if (error == Errors.REBALANCE_IN_PROGRESS) { // REBALANCE_IN_PROGRESS 检测到
                 // since we may be sending the request during rebalance, we should check
                 // this case and ignore the REBALANCE_IN_PROGRESS error
                 if (state == MemberState.STABLE) {

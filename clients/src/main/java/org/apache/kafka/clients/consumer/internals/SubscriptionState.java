@@ -73,7 +73,7 @@ public class SubscriptionState {
     private final Logger log;
 
     private enum SubscriptionType {
-        NONE, AUTO_TOPICS, AUTO_PATTERN, USER_ASSIGNED
+        NONE, AUTO_TOPICS/*按照指定topic名称订阅，自动分配分区*/, AUTO_PATTERN/*按照正则表达式匹配订阅，自动分配分区*/, USER_ASSIGNED/*用户手动指定消费者消费topic和分区编号*/
     }
 
     /* the type of subscription */
@@ -89,15 +89,19 @@ public class SubscriptionState {
     /* The list of topics the group has subscribed to. This may include some topics which are not part
      * of `subscription` for the leader of a group since it is responsible for detecting metadata changes
      * which require a group rebalance. */
+    // consumer group会选举一个leader，leader使用集合记录consumer group中所有消费者订阅的topic
+    // 而其他follower的改集合中只保存自身订阅的topic
     private Set<String> groupSubscription;
 
     /* the partitions that are currently assigned, note that the order of partition matters (see FetchBuilder for more details) */
+    // 记录每个topicpartition消费状态
     private final PartitionStates<TopicPartitionState> assignment;
 
     /* Default offset reset strategy */
     private final OffsetResetStrategy defaultResetStrategy;
 
     /* User-provided listener to be invoked when assignment changes */
+    // 监听分区分配操作
     private ConsumerRebalanceListener rebalanceListener;
 
     private int assignmentId = 0;
@@ -163,6 +167,7 @@ public class SubscriptionState {
 
     public synchronized boolean subscribe(Set<String> topics, ConsumerRebalanceListener listener) {
         registerRebalanceListener(listener);
+        // 模式
         setSubscriptionType(SubscriptionType.AUTO_TOPICS);
         return changeSubscription(topics);
     }
@@ -434,6 +439,11 @@ public class SubscriptionState {
         return result;
     }
 
+    /**
+     * 是否需要自动分配
+     * 只有这两种形式才会rebalance
+     * @return
+     */
     public synchronized boolean hasAutoAssignedPartitions() {
         return this.subscriptionType == SubscriptionType.AUTO_TOPICS || this.subscriptionType == SubscriptionType.AUTO_PATTERN;
     }
@@ -740,12 +750,15 @@ public class SubscriptionState {
     private static class TopicPartitionState {
 
         private FetchState fetchState;
+        // 记录下一次从kafka服务端获取消息的offset
         private FetchPosition position; // last consumed position
 
         private Long highWatermark; // the high watermark from last fetch
         private Long logStartOffset; // the log start offset
         private Long lastStableOffset;
+        // 记录当前topicPartition是否处于暂停状态，和Consumer接口的pause方法相关
         private boolean paused;  // whether this partition has been paused by the user
+        // 重置poisition策略
         private OffsetResetStrategy resetStrategy;  // the strategy to use if the offset needs resetting
         private Long nextRetryTimeMs;
         private Integer preferredReadReplica;
