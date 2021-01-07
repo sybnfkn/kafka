@@ -142,14 +142,15 @@ public class BufferPool {
             // 空余的内存大小
             int freeListSize = freeSize() * this.poolableSize;
             // 未分配的空间 + 分配过但是现在空闲 = 当前的空闲空间大小
-            // 当前空闲的空间 满足 客户的需求
+            // ****** 当前空闲的空间 满足 客户的需求
             if (this.nonPooledAvailableMemory + freeListSize >= size) {
                 // we have enough unallocated or pooled memory to immediately
                 // satisfy the request, but need to allocate the buffer
-                // 如果未分配的内存大小比申请的内存还要小，那只能从已分配的内存列表 free 中将内存空间要回来，直到 nonPooledAvailableMemory 比申请内存大为止
+                // 如果"未分配的内存"大小比申请的内存还要小，那只能从已分配的内存列表 free 中将内存空间要回来，直到 nonPooledAvailableMemory 比申请内存大为止
                 freeUp(size);
+                // 是从"未分配的内存"中分配的
                 this.nonPooledAvailableMemory -= size;
-            } else {
+            } else { // **** 当前两部分空闲空间之和 不能分配出 size的空间
                 // we are out of memory and will have to block
                 // 累计器
                 int accumulated = 0;
@@ -157,7 +158,7 @@ public class BufferPool {
                 Condition moreMemory = this.lock.newCondition();
                 try {
                     long remainingTimeToBlockNs = TimeUnit.MILLISECONDS.toNanos(maxTimeToBlockMs);
-                    // 添加到waiters
+                    // Condition 添加到waiters ，在内存回收的时候会唤醒
                     this.waiters.addLast(moreMemory);
                     // loop over and over until we have a buffer or have reserved
                     // enough memory to allocate one
@@ -172,7 +173,8 @@ public class BufferPool {
                         long timeNs;
                         boolean waitingTimeElapsed;
                         try {
-                            // 等待内存释放的时候唤醒
+                            // 1。等待内存释放的时候唤醒
+                            // 2。超时时间到了被唤醒了。
                             waitingTimeElapsed = !moreMemory.await(remainingTimeToBlockNs, TimeUnit.NANOSECONDS);
                         } finally {
                             long endWaitNs = time.nanoseconds();
@@ -183,7 +185,7 @@ public class BufferPool {
                         if (this.closed)
                             throw new KafkaException("Producer closed while allocating memory");
 
-                        // 超过了最大阻塞时间了，客户端等待超时了，直接返回异常信息
+                        // 超过了最大阻塞时间了，客户端等待超时了，此时还没分配到size的空间。直接返回异常信息
                         if (waitingTimeElapsed) {
                             this.metrics.sensor("buffer-exhausted-records").record();
                             throw new BufferExhaustedException("Failed to allocate memory within the configured max blocking time " + maxTimeToBlockMs + " ms.");
@@ -203,7 +205,7 @@ public class BufferPool {
                         } else {
                             // we'll need to allocate memory, but we may only get
                             // part of what we need on this iteration
-                            // 从空闲列表中取出一个，不满足客户的需求，
+                            // 从空闲列表中一直获取，直到把空闲列表拉完了
                             freeUp(size - accumulated); // 客户端还急需要多少内存
                             // 1.客户还需要的内存大小（size - accumulated） < nonPooledAvailableMemory , 那直接从nonPooledAvailableMemory 划分出size - accumulated  -- 循环会退出
                             // 2.客户还需要的内存大小（size - accumulated） > nonPooledAvailableMemory , 直接将nonPooledAvailableMemory 划分出所有nonPooledAvailableMemory -- 循环不会退出
