@@ -186,11 +186,12 @@ public final class RecordAccumulator {
                                      byte[] value,
                                      Header[] headers,// 消息头，可以理解为额外消息属性。
                                      Callback callback,
-                                     long maxTimeToBlock, // 追加超时时间
+                                     long maxTimeToBlock, // 追加超时时间    （最大耗时 - 获取元数据耗时时间）
                                      boolean abortOnNewBatch,
-                                     long nowMs) throws InterruptedException {
+                                     long nowMs /*现在时间*/) throws InterruptedException {
         // We keep track of the number of appending thread to make sure we do not miss batches in
         // abortIncompleteBatches().
+        // 当前多少个追加线程正在运行
         appendsInProgress.incrementAndGet();
         ByteBuffer buffer = null;
         if (headers == null) headers = Record.EMPTY_HEADERS;
@@ -198,7 +199,7 @@ public final class RecordAccumulator {
             // check if we have an in-progress batch
             // 路由信息获取数组
             /**
-             * 尝试根据 topic与分区在 kafka 中获取一个双端队列，如果不存在，则创建一个，然后调用 tryAppend 方法将消息追加到缓存中。
+             * 尝试根据 topic&分区 在 kafka 中获取一个双端队列，如果不存在，则创建一个，然后调用 tryAppend 方法将消息追加到缓存中。
              * Kafka 会为每一个 topic 的每一个分区创建一个消息缓存区，消息先追加到缓存中，然后消息发送 API 立即返回，
              * 然后由单独的线程 Sender 将缓存区中的消息定时发送到 broker 。这里的缓存区的实现使用的是 ArrayQeque。
              * 然后调用 tryAppend 方法尝试将消息追加到其缓存区，如果追加成功，则返回结果。
@@ -227,6 +228,7 @@ public final class RecordAccumulator {
             // MAX（消息大小，batch.size）
             int size = Math.max(this.batchSize, AbstractRecords.estimateSizeInBytesUpperBound(maxUsableMagic, compression, key, value, headers));
             log.trace("Allocating a new {} byte message buffer for topic {} partition {} with remaining timeout {}ms", size, tp.topic(), tp.partition(), maxTimeToBlock);
+            // **进行申请 取 { batchSize 或者 消息体积 } 两者最大的。
             buffer = free.allocate(size, maxTimeToBlock);
 
             // Update the current time in case the buffer allocation blocked above.
@@ -244,7 +246,9 @@ public final class RecordAccumulator {
                 if (closed)
                     throw new KafkaException("Producer closed while send in progress");
 
-                // 理解是不是双重锁校验类似
+                // ************** 理解是不是双重锁校验类似 **********
+                // 此时先尝试追加一下，可能其他线程此时已经创建了新的ProducerBatch。
+                // 看看当前锁的力度比较低，所以加锁之后需要重新check一下
                 RecordAppendResult appendResult = tryAppend(timestamp, key, value, headers, callback, dq, nowMs);
                 if (appendResult != null) {
                     // Somebody else found us a batch, return the one we waited for! Hopefully this doesn't happen often...
@@ -258,6 +262,7 @@ public final class RecordAccumulator {
                         callback, nowMs));
 
                 dq.addLast(batch);
+                // 将该批次加入到 incomplete 容器中，该容器存放未完成发送到 broker 服务器中的消息批次，当 Sender 线程将消息发送到 broker 服务端后，会将其移除并释放所占内存
                 incomplete.add(batch);
 
                 // Don't deallocate this buffer in the finally block as it's being used in the record batch

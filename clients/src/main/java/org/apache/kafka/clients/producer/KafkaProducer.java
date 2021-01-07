@@ -987,6 +987,7 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
             RecordAccumulator.RecordAppendResult result = accumulator.append(tp, timestamp, serializedKey,
                     serializedValue, headers, interceptCallback, remainingWaitMs, true, nowMs);
 
+            // ----- 因为当前批次不满足，而中止了
             if (result.abortForNewBatch) {
                 int prevPartition = partition;
                 partitioner.onNewBatch(record.topic(), cluster, prevPartition);
@@ -1056,6 +1057,7 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
         // add topic to metadata topic list if it is not there already and reset expiry
         Cluster cluster = metadata.fetch();
 
+        // 非法的topic
         if (cluster.invalidTopics().contains(topic))
             throw new InvalidTopicException(topic);
 
@@ -1084,7 +1086,7 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
             metadata.add(topic, nowMs + elapsed);
             // 请求更新这个topic，此时只部分更新
             int version = metadata.requestUpdateForTopic(topic);
-            // 唤醒sender线程
+            // 唤醒sender线程，去获取topic的信息
             sender.wakeup();
             try {
                 // 等待在这里

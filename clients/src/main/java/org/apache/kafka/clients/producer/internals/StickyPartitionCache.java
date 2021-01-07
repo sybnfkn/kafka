@@ -27,7 +27,8 @@ import org.apache.kafka.common.utils.Utils;
 
 /**
  * An internal class that implements a cache used for sticky partitioning behavior. The cache tracks the current sticky
- * partition for any given topic. This class should not be used externally. 
+ * partition for any given topic. This class should not be used externally.
+ * 一个内部类，实现用于粘性分区行为的缓存。缓存跟踪任何给定主题的当前粘性*分区。此类不应在外部使用。
  */
 public class StickyPartitionCache {
     // key是topic
