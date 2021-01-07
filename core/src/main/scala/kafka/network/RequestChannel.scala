@@ -316,6 +316,7 @@ class RequestChannel(val queueSize: Int,
                      allowDisabledApis: Boolean = false) extends KafkaMetricsGroup {
   import RequestChannel._
   val metrics = new RequestChannel.Metrics(allowDisabledApis)
+  //
   private val requestQueue = new ArrayBlockingQueue[BaseRequest](queueSize)
   private val processors = new ConcurrentHashMap[Int, Processor]()
   val requestQueueSizeMetricName = metricNamePrefix.concat(RequestQueueSizeMetric)

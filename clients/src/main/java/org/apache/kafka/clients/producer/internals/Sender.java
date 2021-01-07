@@ -381,9 +381,10 @@ public class Sender implements Runnable {
          * 4。该分区对应的连接正在处理中的请求数时是否超过设定值，默认为 5，可通过属性 max.in.flight.requests.per.connection 来设置。
          */
         long notReadyTimeout = Long.MAX_VALUE;
+        // 遍历这些发送的node，看哪些没有准备好就移除掉
         while (iter.hasNext()) {
             Node node = iter.next();
-            // 会检查 这个node是不是准备好
+            // ************************** 会检查 这个node是不是准备好
             // 其中一个是NetworkClient.send对象没有发送完毕
             if (!this.client.ready(node, now)) {
                 iter.remove();
