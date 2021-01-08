@@ -344,6 +344,8 @@ public class Sender implements Runnable {
 
         long currentTimeMs = time.milliseconds();
         // 数据先写到内存中
+        // 1。数据写到InFlightRequest的头部节点
+        // 2。写到channel的send属性准备发送
         long pollTimeout = sendProducerData(currentTimeMs);
         // 数据写到网卡
         client.poll(pollTimeout, currentTimeMs);
@@ -404,7 +406,7 @@ public class Sender implements Runnable {
          * maxRequestSize ： max.request.size 单次消息请求最大值
          */
         // create produce requests
-        Map<Integer, List<ProducerBatch>> batches = this.accumulator.drain(cluster, result.readyNodes, this.maxRequestSize, now);
+        Map<Integer/*nodeId*/, List<ProducerBatch>> batches = this.accumulator.drain(cluster, result.readyNodes, this.maxRequestSize, now);
         /**
          * 将抽取的 ProducerBatch 加入到 inFlightBatches 数据结构，
          * 该属性的声明如下：Map<TopicPartition, List< ProducerBatch >> inFlightBatches，
@@ -834,6 +836,7 @@ public class Sender implements Runnable {
         // callback函数
         RequestCompletionHandler callback = response -> handleProduceResponse(response, recordsByPartition, time.milliseconds());
 
+        // 发送的nodeId
         String nodeId = Integer.toString(destination);
         ClientRequest clientRequest = client.newClientRequest(nodeId, requestBuilder, now, acks != 0,
                 requestTimeoutMs, null, null, callback);

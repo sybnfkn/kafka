@@ -33,6 +33,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 final class InFlightRequests {
 
     private final int maxInFlightRequestsPerConnection;
+    // 每个node都会 维护一个 InFlightRequest Deque
     private final Map<String, Deque<NetworkClient.InFlightRequest>> requests = new HashMap<>();
     /** Thread safe total number of in flight requests. */
     private final AtomicInteger inFlightRequestCount = new AtomicInteger(0);
@@ -70,6 +71,7 @@ final class InFlightRequests {
      * Get the oldest request (the one that will be completed next) for the given node
      */
     public NetworkClient.InFlightRequest completeNext(String node) {
+        // 移除出去
         NetworkClient.InFlightRequest inFlightRequest = requestQueue(node).pollLast();
         inFlightRequestCount.decrementAndGet();
         return inFlightRequest;
@@ -104,6 +106,11 @@ final class InFlightRequests {
      * 队头消息和对应KafkaChannel.send字段指向同一个消息，为了避免未发送的消息被覆盖，也不能让KafkaChannel.send 字段指向新请求
      * queue.size() < this.maxInFlightRequestsPerConnection 为了判断InFlightRequest队列中是否堆积过多请求。
      * 如果node对应队积累很多未响应请求，说明这个节点负载比较大，或者网络有问题，继续发送的话可能导致请求超时
+     *
+     * 1。node 的queue为空
+     * 2。node的queue的头节点已经发送完毕 并且 queue.size < 阈值
+     *
+     * ********如果之前发送的请求并没有通过底层socket实际发送完成, 是不允许发送新的request的
      */
     public boolean canSendMore(String node) {
         Deque<NetworkClient.InFlightRequest> queue = requests.get(node);

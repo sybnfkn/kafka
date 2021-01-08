@@ -108,7 +108,7 @@ public class Selector implements Selectable, AutoCloseable {
     private final Map<String, KafkaChannel> channels;
     private final Set<KafkaChannel> explicitlyMutedChannels;
     private boolean outOfMemory;
-    // 已发送万请求
+    // 已发送完请（记录下，sender线程中会遍历处理，如果发送完的请求是oneway方式，就直接自定义response）
     private final List<Send> completedSends;
     // 已收到请求
     private final LinkedHashMap<String, NetworkReceive> completedReceives;

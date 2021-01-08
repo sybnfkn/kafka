@@ -128,7 +128,7 @@ public class BufferPool {
 
         try {
             // check if we have a free buffer of the right size pooled
-            // 用户请求申请内存时，如果发现 free 中有空闲的内存，则直接从中取
+            // ********* 用户请求申请内存时，如果发现 free 中有空闲的内存，则直接从中取
             // size = Math.max(this.batchSize, AbstractRecords.estimateSizeInBytesUpperBound(maxUsableMagic, compression, key, value, headers));
             /**
              * 如果你的消息大小小于 batchSize，则申请的内存大小为 batchSize，那么上面的逻辑就是如果申请的内存大小等于 batchSize 并且 free 不空闲，则直接从 free 中获取
@@ -235,6 +235,7 @@ public class BufferPool {
         }
 
         if (buffer == null)
+            // 分配空间～
             return safeAllocateByteBuffer(size);
         else
             return buffer;

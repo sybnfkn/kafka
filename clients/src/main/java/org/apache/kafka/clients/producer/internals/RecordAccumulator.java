@@ -255,6 +255,9 @@ public final class RecordAccumulator {
                     return appendResult;
                 }
 
+                /**
+                 * 重新创建一个batch
+                 */
                 MemoryRecordsBuilder recordsBuilder = recordsBuilder(buffer, maxUsableMagic);
                 ProducerBatch batch = new ProducerBatch(tp, recordsBuilder, nowMs);
                 // 再次追加 ， 这时候正常都可以追加成功
@@ -270,6 +273,7 @@ public final class RecordAccumulator {
                 return new RecordAppendResult(future, dq.size() > 1 || batch.isFull(), true, false);
             }
         } finally {
+            // ********************** 这个空间没用到，直接回收掉   **********************
             if (buffer != null)
                 free.deallocate(buffer);
             appendsInProgress.decrementAndGet();
@@ -294,7 +298,7 @@ public final class RecordAccumulator {
      */
     private RecordAppendResult tryAppend(long timestamp, byte[] key, byte[] value, Header[] headers,
                                          Callback callback, Deque<ProducerBatch> deque, long nowMs) {
-        // 获取最后一个
+        // 获取最后一个，然后尝试写入
         ProducerBatch last = deque.peekLast();
         if (last != null) {
             FutureRecordMetadata future = last.tryAppend(timestamp, key, value, headers, callback, nowMs);

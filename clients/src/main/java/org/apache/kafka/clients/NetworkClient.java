@@ -477,6 +477,7 @@ public class NetworkClient implements KafkaClient {
 
     private void doSend(ClientRequest clientRequest, boolean isInternalRequest, long now) {
         ensureActive();
+        // 发往的目标node
         String nodeId = clientRequest.destination();
         if (!isInternalRequest) {
             // If this request came from outside the NetworkClient, validate
@@ -576,6 +577,7 @@ public class NetworkClient implements KafkaClient {
         try {
             // 触发真正的网络通讯，该方法中会通过收到调用 NIO 中的 Selector#select() 方法，
             // 对通道的读写就绪事件进行处理，当写事件就绪后，就会将通道中的消息发送到远端的 broker。
+            // 1。completedSends 写完的send会放到这里，
             this.selector.poll(Utils.min(timeout, metadataTimeout, defaultRequestTimeoutMs));
         } catch (IOException e) {
             log.error("Unexpected error during I/O", e);
@@ -875,6 +877,8 @@ public class NetworkClient implements KafkaClient {
     private void handleCompletedSends(List<ClientResponse> responses, long now) {
         // if no response is expected then when the send is completed, return it
         for (Send send : this.selector.completedSends()) {
+            // 看下最近发送的这个请求，是不是oneway方式
+            // 如果是直接就可以response了，然后从InFlightRequest删除
             InFlightRequest request = this.inFlightRequests.lastSent(send.destination());
             // 这个请求不需要respoose
             if (!request.expectResponse) {
@@ -915,6 +919,7 @@ public class NetworkClient implements KafkaClient {
             // 获取返回响应的NodeId
             String source = receive.source();
             // 从InfightRequest取出对应ClinetRequest
+            // 取出尾部的请求，暗示当前收到的响应就对应该请求，因为Kafka服务端会保证按照顺序响应请求。
             InFlightRequest req = inFlightRequests.completeNext(source);
 
             Struct responseStruct = parseStructMaybeUpdateThrottleTimeMetrics(receive.payload(), req.header,
