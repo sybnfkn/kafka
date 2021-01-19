@@ -954,7 +954,7 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
             // 如果未指定，轮训所有分区
             int partition = partition(record, serializedKey, serializedValue, cluster);
 
-            // 封住路由信息
+            // 封装路由信息
             tp = new TopicPartition(record.topic(), partition);
 
             // 如果是消息头信息(RecordHeaders)，则设置为只读。

@@ -401,7 +401,7 @@ public class Sender implements Runnable {
         }
 
         /**
-         * 根据已准备的分区，从缓存区中抽取待发送的消息批次( ProducerBatch )，
+         * 根据已准备的node，从缓存区中抽取待发送的消息批次( ProducerBatch )，
          * 并且按照 nodeId:List 组织，注意，抽取后的 ProducerBatch 将不能再追加消息了，就算还有剩余空间可用，
          * maxRequestSize ： max.request.size 单次消息请求最大值
          */
@@ -665,7 +665,7 @@ public class Sender implements Runnable {
                 (batch.magic() >= RecordBatch.MAGIC_VALUE_V2 || batch.isCompressed())) {
             // If the batch is too large, we split the batch and send the split batches again. We do not decrement
             // the retry attempts in this case.
-            // 如果因为消息太大，我们回切分消息然后把发出去。而不会增加尝试次数
+
             log.warn(
                 "Got error produce response in correlation id {} on topic-partition {}, splitting and retrying ({} attempts left). Error: {}",
                 correlationId,
@@ -674,6 +674,7 @@ public class Sender implements Runnable {
                 error);
             if (transactionManager != null)
                 transactionManager.removeInFlightBatch(batch);
+            // 如果因为消息太大，我们回切分消息然后把发出去。而不会增加尝试次数
             this.accumulator.splitAndReenqueue(batch);
             maybeRemoveAndDeallocateBatch(batch);
             this.sensors.recordBatchSplit();
@@ -721,6 +722,7 @@ public class Sender implements Runnable {
                 metadata.requestUpdate();
             }
         } else {
+            // 回收ProductBatch
             completeBatch(batch, response);
         }
 
@@ -742,6 +744,9 @@ public class Sender implements Runnable {
             transactionManager.handleCompletedBatch(batch, response);
         }
 
+        /**
+         * 批次处理完了，才会回收掉
+         */
         if (batch.done(response.baseOffset, response.logAppendTime, null)) {
             maybeRemoveAndDeallocateBatch(batch);
         }

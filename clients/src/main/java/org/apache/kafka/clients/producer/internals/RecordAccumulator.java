@@ -459,6 +459,7 @@ public final class RecordAccumulator {
      * Get a list of nodes whose partitions are ready to be sent, and the earliest time at which any non-sendable
      * partition will be ready; Also return the flag for whether there are any unknown leaders for the accumulated
      * partition batches.
+     * 获取已准备好发送分区的节点的列表，以及所有不可发送的分区准备就绪的最早时间；还返回该标志，以指示累积的*分区批次是否有未知的领导者。
      * <p>
      * A destination node is ready to send data if:
      * <ol>
@@ -610,6 +611,7 @@ public final class RecordAccumulator {
          * start 当前开始遍历的分区序号。
          * drainIndex 上次抽取的队列索引后，这里主要是为了每个队列都是从零号分区开始抽取。
          */
+        // 使饥饿可能性降低，每次都不是从0开始
         int start = drainIndex = drainIndex % parts.size();
         // 循环从缓存区抽取对应分区中累积的数据
         do {
@@ -649,7 +651,7 @@ public final class RecordAccumulator {
                     if (shouldStopDrainBatchesForPartition(first, tp))
                         break;
 
-                    // 将当前批次加入到已准备集合中，并关闭该批次，即不在允许向该批次中追加消息。
+
                     boolean isTransactional = transactionManager != null && transactionManager.isTransactional();
                     ProducerIdAndEpoch producerIdAndEpoch =
                         transactionManager != null ? transactionManager.producerIdAndEpoch() : null;
@@ -671,6 +673,7 @@ public final class RecordAccumulator {
 
                         transactionManager.addInFlightBatch(batch);
                     }
+                    // 将当前批次加入到已准备集合中，并关闭该批次，即不在允许向该批次中追加消息。
                     batch.close();
                     // 计数
                     size += batch.records().sizeInBytes();

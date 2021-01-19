@@ -299,8 +299,10 @@ public class BufferPool {
         try {
             if (size == this.poolableSize && size == buffer.capacity()) {
                 buffer.clear();
+                // 如果大小是poolableSize，直接回收使用
                 this.free.add(buffer);
             } else {
+                // 否则不会重复使用，直接gc销毁掉
                 this.nonPooledAvailableMemory += size;
             }
             Condition moreMem = this.waiters.peekFirst();
